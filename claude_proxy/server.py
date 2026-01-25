@@ -1,0 +1,204 @@
+"""FastAPI server exposing Claude Code SDK as OpenAI-compatible API."""
+
+import asyncio
+import time
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+
+from .models import (
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatCompletionChunk,
+    Choice,
+    StreamChoice,
+    Message,
+    DeltaMessage,
+    ModelList,
+    ModelInfo,
+)
+from .session_logger import SessionLogger
+
+app = FastAPI(title="Claude Code Bridge", version="0.1.0")
+
+# Limit concurrent Claude SDK calls
+MAX_CONCURRENT = 3
+semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+# Model name mapping
+MODEL_MAP = {
+    "opus": "opus",
+    "sonnet": "sonnet",
+    "haiku": "haiku",
+    "claude-opus": "opus",
+    "claude-sonnet": "sonnet",
+    "claude-haiku": "haiku",
+    "claude-3-opus": "opus",
+    "claude-3-sonnet": "sonnet",
+    "claude-3-haiku": "haiku",
+    "claude-3.5-sonnet": "sonnet",
+    "claude-3.5-haiku": "haiku",
+}
+
+AVAILABLE_MODELS = ["opus", "sonnet", "haiku"]
+
+
+def map_model(model: str) -> str:
+    """Map incoming model name to Claude Code SDK model."""
+    model_lower = model.lower()
+    if model_lower in MODEL_MAP:
+        return MODEL_MAP[model_lower]
+    # Default to sonnet if unknown
+    return "sonnet"
+
+
+def format_messages(messages: list[Message]) -> str:
+    """Convert OpenAI-style messages to a single prompt string."""
+    parts = []
+    system_prompt = None
+
+    for msg in messages:
+        if msg.role == "system":
+            system_prompt = msg.content
+        elif msg.role == "user":
+            parts.append(f"User: {msg.content}")
+        elif msg.role == "assistant":
+            parts.append(f"Assistant: {msg.content}")
+
+    prompt = "\n\n".join(parts)
+    if system_prompt:
+        prompt = f"System: {system_prompt}\n\n{prompt}"
+
+    return prompt
+
+
+async def call_claude_sdk(prompt: str, model: str, logger: SessionLogger) -> str:
+    """Call Claude Code SDK and return response text."""
+    options = ClaudeAgentOptions(
+        model=map_model(model),
+        max_turns=1,
+    )
+
+    response_text = ""
+    try:
+        async for msg in query(prompt=prompt, options=options):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        response_text += block.text
+                        logger.log_chunk(block.text)
+        logger.log_finish("stop")
+    except Exception as e:
+        logger.log_error(str(e))
+        raise
+
+    return response_text
+
+
+async def stream_claude_sdk(prompt: str, model: str, request_id: str, logger: SessionLogger):
+    """Stream Claude Code SDK response as SSE chunks."""
+    options = ClaudeAgentOptions(
+        model=map_model(model),
+        max_turns=1,
+    )
+
+    created = int(time.time())
+
+    # Send initial chunk with role
+    initial_chunk = ChatCompletionChunk(
+        id=request_id,
+        created=created,
+        model=model,
+        choices=[StreamChoice(delta=DeltaMessage(role="assistant", content=""))],
+    )
+    yield f"data: {initial_chunk.model_dump_json()}\n\n"
+
+    try:
+        async for msg in query(prompt=prompt, options=options):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        logger.log_chunk(block.text)
+                        chunk = ChatCompletionChunk(
+                            id=request_id,
+                            created=created,
+                            model=model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=block.text))],
+                        )
+                        yield f"data: {chunk.model_dump_json()}\n\n"
+        logger.log_finish("stop")
+    except Exception as e:
+        logger.log_error(str(e))
+        raise
+
+    # Send final chunk
+    final_chunk = ChatCompletionChunk(
+        id=request_id,
+        created=created,
+        model=model,
+        choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
+    )
+    yield f"data: {final_chunk.model_dump_json()}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    """OpenAI-compatible chat completions endpoint."""
+    request_id = f"chatcmpl-{uuid4().hex[:12]}"
+    prompt = format_messages(request.messages)
+    logger = SessionLogger(request_id, request.model)
+
+    async with semaphore:
+        if request.stream:
+            async def stream_with_logging():
+                try:
+                    async for chunk in stream_claude_sdk(prompt, request.model, request_id, logger):
+                        yield chunk
+                finally:
+                    logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
+
+            return StreamingResponse(
+                stream_with_logging(),
+                media_type="text/event-stream",
+            )
+
+        response_text = await call_claude_sdk(prompt, request.model, logger)
+        logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
+
+        return ChatCompletionResponse(
+            id=request_id,
+            created=int(time.time()),
+            model=request.model,
+            choices=[
+                Choice(
+                    message=Message(role="assistant", content=response_text),
+                )
+            ],
+        )
+
+
+@app.get("/v1/models")
+async def list_models():
+    """List available models."""
+    return ModelList(
+        data=[ModelInfo(id=model) for model in AVAILABLE_MODELS]
+    )
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+def main():
+    """Entry point for CLI."""
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    main()
