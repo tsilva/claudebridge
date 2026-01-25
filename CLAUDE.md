@@ -6,7 +6,7 @@ Bridge OpenAI tools to Claude Code SDK. Uses your active Claude subscription.
 
 ```bash
 uv pip install -e .
-claude-proxy
+claude-bridge
 ```
 
 ## Endpoints

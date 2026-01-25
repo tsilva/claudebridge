@@ -105,7 +105,7 @@ def main() -> None:
                 stream_response(client, args.url, args.model, prompt)
     except httpx.ConnectError:
         print(f"Error: Could not connect to proxy at {args.url}", file=sys.stderr)
-        print("Make sure the proxy is running: claude-proxy", file=sys.stderr)
+        print("Make sure the proxy is running: claude-bridge", file=sys.stderr)
         sys.exit(1)
     except httpx.HTTPStatusError as e:
         print(f"Error: HTTP {e.response.status_code}", file=sys.stderr)

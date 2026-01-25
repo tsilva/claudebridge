@@ -18,7 +18,7 @@ test = [
 ]
 
 [project.scripts]
-claude-proxy = "claude_proxy.server:main"
+claude-bridge = "claude_proxy.server:main"
 claude-client = "claude_proxy.client:main"
 
 [build-system]

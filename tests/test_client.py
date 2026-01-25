@@ -1,8 +1,8 @@
 """
-Client integration tests for claude-code-openai-proxy.
+Client integration tests for claude-bridge.
 
 Prerequisites:
-- Server must be running: claude-proxy
+- Server must be running: claude-bridge
 
 Usage:
 - pytest tests/test_client.py -v
