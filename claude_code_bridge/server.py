@@ -1,12 +1,20 @@
 """FastAPI server exposing Claude Code SDK as OpenAI-compatible API."""
 
 import asyncio
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+)
 from fastapi.responses import StreamingResponse
 from claude_agent_sdk import ClaudeAgentOptions, AssistantMessage, ResultMessage, TextBlock
 
