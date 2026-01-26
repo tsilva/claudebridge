@@ -8,8 +8,6 @@ from pathlib import Path
 class SessionLogger:
     """Logs a single Claude request/response session to a plain text file."""
 
-    LOG_DIR = Path("logs/sessions")
-
     def __init__(self, request_id: str, model: str):
         self.request_id = request_id
         self.model = model
@@ -19,8 +17,9 @@ class SessionLogger:
         self.error: str | None = None
 
         # Ensure log directory exists
-        self.LOG_DIR.mkdir(parents=True, exist_ok=True)
-        self.log_path = self.LOG_DIR / f"{request_id}.log"
+        self.log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.log_dir / f"{request_id}.log"
 
     def _format_time(self, dt: datetime) -> str:
         """Format datetime for display."""

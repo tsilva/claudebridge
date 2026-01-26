@@ -1,6 +1,7 @@
 """Simple CLI client for Claude Code Bridge."""
 
 import argparse
+import asyncio
 import sys
 import json
 
@@ -11,8 +12,18 @@ DEFAULT_URL = "http://localhost:8000"
 DEFAULT_MODEL = None  # Use local Claude Code settings
 
 
-def stream_response(client: httpx.Client, url: str, model: str | None, prompt: str) -> None:
-    """Stream a response from the bridge and print as it arrives."""
+async def stream_response_async(
+    client: httpx.AsyncClient,
+    url: str,
+    model: str | None,
+    prompt: str,
+    index: int,
+    delay: float = 0.0,
+) -> tuple[int, str]:
+    """Stream a single response, returning index and collected content."""
+    if delay > 0:
+        await asyncio.sleep(delay)
+
     payload = {
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
@@ -20,9 +31,11 @@ def stream_response(client: httpx.Client, url: str, model: str | None, prompt: s
     if model:
         payload["model"] = model
 
-    with client.stream("POST", f"{url}/v1/chat/completions", json=payload) as response:
+    chunks: list[str] = []
+
+    async with client.stream("POST", f"{url}/v1/chat/completions", json=payload) as response:
         response.raise_for_status()
-        for line in response.iter_lines():
+        async for line in response.aiter_lines():
             if not line:
                 continue
             if line.startswith("data: "):
@@ -33,14 +46,25 @@ def stream_response(client: httpx.Client, url: str, model: str | None, prompt: s
                     chunk = json.loads(data)
                     content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
                     if content:
-                        print(content, end="", flush=True)
+                        chunks.append(content)
                 except json.JSONDecodeError:
                     continue
-    print()  # Final newline
+
+    return index, "".join(chunks)
 
 
-def get_response(client: httpx.Client, url: str, model: str | None, prompt: str) -> str:
-    """Get a non-streaming response from the bridge."""
+async def get_response_async(
+    client: httpx.AsyncClient,
+    url: str,
+    model: str | None,
+    prompt: str,
+    index: int,
+    delay: float = 0.0,
+) -> tuple[int, str]:
+    """Get a non-streaming response, returning index and content."""
+    if delay > 0:
+        await asyncio.sleep(delay)
+
     payload = {
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
@@ -48,10 +72,53 @@ def get_response(client: httpx.Client, url: str, model: str | None, prompt: str)
     if model:
         payload["model"] = model
 
-    response = client.post(f"{url}/v1/chat/completions", json=payload)
+    response = await client.post(f"{url}/v1/chat/completions", json=payload)
     response.raise_for_status()
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"]["content"]
+
+    return index, content
+
+
+async def run_parallel(
+    url: str,
+    model: str | None,
+    prompt: str,
+    count: int,
+    stream: bool,
+) -> None:
+    """Run multiple requests in parallel with staggered starts."""
+    show_index = count > 1
+    stagger_delay = 0.1  # 100ms between request launches
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        if stream:
+            tasks = [
+                asyncio.create_task(
+                    stream_response_async(
+                        client, url, model, prompt, i + 1,
+                        delay=i * stagger_delay,
+                    )
+                )
+                for i in range(count)
+            ]
+        else:
+            tasks = [
+                asyncio.create_task(
+                    get_response_async(
+                        client, url, model, prompt, i + 1,
+                        delay=i * stagger_delay,
+                    )
+                )
+                for i in range(count)
+            ]
+
+        # Print responses as they complete
+        for coro in asyncio.as_completed(tasks):
+            index, content = await coro
+            prefix = f"[{index}] " if show_index else ""
+            print(f"{prefix}{content}")
+            print()  # Blank line between responses
 
 
 def main() -> None:
@@ -61,7 +128,8 @@ def main() -> None:
         epilog="Examples:\n"
                "  claude-code-client 'What is Python?'\n"
                "  echo 'Hello' | claude-code-client\n"
-               "  claude-code-client --model opus 'Explain decorators'",
+               "  claude-code-client --model opus 'Explain decorators'\n"
+               "  claude-code-client -n 3 'Hello'  # Run 3 parallel requests",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -84,6 +152,12 @@ def main() -> None:
         action="store_true",
         help="Disable streaming (wait for full response)",
     )
+    parser.add_argument(
+        "--parallel", "-n",
+        type=int,
+        default=1,
+        help="Number of parallel requests to make (default: 1)",
+    )
 
     args = parser.parse_args()
 
@@ -98,13 +172,17 @@ def main() -> None:
     if not prompt:
         parser.error("Empty prompt provided.")
 
+    if args.parallel < 1:
+        parser.error("Parallel count must be at least 1.")
+
     try:
-        with httpx.Client(timeout=300.0) as client:
-            if args.no_stream:
-                response = get_response(client, args.url, args.model, prompt)
-                print(response)
-            else:
-                stream_response(client, args.url, args.model, prompt)
+        asyncio.run(run_parallel(
+            url=args.url,
+            model=args.model,
+            prompt=prompt,
+            count=args.parallel,
+            stream=not args.no_stream,
+        ))
     except httpx.ConnectError:
         print(f"Error: Could not connect to bridge at {args.url}", file=sys.stderr)
         print("Make sure the bridge is running: claude-code-bridge", file=sys.stderr)

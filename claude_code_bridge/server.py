@@ -1,6 +1,7 @@
 """FastAPI server exposing Claude Code SDK as OpenAI-compatible API."""
 
 import asyncio
+import os
 import time
 from uuid import uuid4
 
@@ -24,8 +25,11 @@ from .session_logger import SessionLogger
 app = FastAPI(title="Claude Code Bridge", version="0.1.0")
 
 # Limit concurrent Claude SDK calls
-MAX_CONCURRENT = 3
+MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", 3))
 semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+# Timeout for Claude SDK calls (in seconds)
+CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
 
 # Model name mapping
 MODEL_MAP = {
@@ -85,15 +89,22 @@ async def call_claude_sdk(prompt: str, model: str | None, logger: SessionLogger)
         **({"model": mapped_model} if mapped_model else {}),
     )
 
-    response_text = ""
-    try:
+    async def _query():
+        response_text = ""
         async for msg in query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):
                         response_text += block.text
                         logger.log_chunk(block.text)
+        return response_text
+
+    try:
+        response_text = await asyncio.wait_for(_query(), timeout=CLAUDE_TIMEOUT)
         logger.log_finish("stop")
+    except asyncio.TimeoutError:
+        logger.log_error(f"Timeout after {CLAUDE_TIMEOUT}s")
+        raise HTTPException(status_code=504, detail=f"Claude SDK timed out after {CLAUDE_TIMEOUT}s")
     except Exception as e:
         logger.log_error(str(e))
         raise
@@ -112,6 +123,7 @@ async def stream_claude_sdk(prompt: str, model: str | None, request_id: str, log
     )
 
     created = int(time.time())
+    start_time = time.monotonic()
 
     # Send initial chunk with role
     initial_chunk = ChatCompletionChunk(
@@ -124,6 +136,10 @@ async def stream_claude_sdk(prompt: str, model: str | None, request_id: str, log
 
     try:
         async for msg in query(prompt=prompt, options=options):
+            # Check timeout
+            if time.monotonic() - start_time > CLAUDE_TIMEOUT:
+                logger.log_error(f"Timeout after {CLAUDE_TIMEOUT}s")
+                raise asyncio.TimeoutError(f"Claude SDK timed out after {CLAUDE_TIMEOUT}s")
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):
@@ -136,6 +152,9 @@ async def stream_claude_sdk(prompt: str, model: str | None, request_id: str, log
                         )
                         yield f"data: {chunk.model_dump_json()}\n\n"
         logger.log_finish("stop")
+    except asyncio.TimeoutError:
+        logger.log_error(f"Timeout after {CLAUDE_TIMEOUT}s")
+        raise
     except Exception as e:
         logger.log_error(str(e))
         raise
@@ -204,7 +223,7 @@ async def health():
 def main():
     """Entry point for CLI."""
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
 
 
 if __name__ == "__main__":
