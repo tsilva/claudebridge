@@ -32,6 +32,8 @@ claude_proxy/
 - **Concurrency**: Uses `asyncio.Semaphore(3)` to limit concurrent Claude SDK calls
 - **Streaming**: SSE format matching OpenAI's streaming response
 - **Model mapping**: Flexible model name mapping (e.g., `claude-3-sonnet` → `sonnet`)
+- **User settings**: Uses `setting_sources=["user"]` to load user's Claude Code settings (including default model)
+- **System prompt**: Uses `system_prompt={"type": "preset", "preset": "claude_code"}` to preserve the default Claude Code system prompt
 
 ## Testing
 

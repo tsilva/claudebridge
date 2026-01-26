@@ -80,6 +80,8 @@ async def call_claude_sdk(prompt: str, model: str | None, logger: SessionLogger)
     mapped_model = map_model(model)
     options = ClaudeAgentOptions(
         max_turns=1,
+        setting_sources=["user"],  # Load user settings (including default model)
+        system_prompt={"type": "preset", "preset": "claude_code"},  # Use default Claude Code system prompt
         **({"model": mapped_model} if mapped_model else {}),
     )
 
@@ -104,6 +106,8 @@ async def stream_claude_sdk(prompt: str, model: str | None, request_id: str, log
     mapped_model = map_model(model)
     options = ClaudeAgentOptions(
         max_turns=1,
+        setting_sources=["user"],  # Load user settings (including default model)
+        system_prompt={"type": "preset", "preset": "claude_code"},  # Use default Claude Code system prompt
         **({"model": mapped_model} if mapped_model else {}),
     )
 
