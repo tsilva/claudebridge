@@ -22,7 +22,6 @@ Supports OpenRouter-style model slugs for unified model naming across providers:
 **Supported formats:**
 - OpenRouter slugs: `anthropic/claude-sonnet-4`, `anthropic/claude-opus-4.5`, etc.
 - Simple names: `opus`, `sonnet`, `haiku`
-- No model: Uses your Claude Code user settings default
 
 **Examples:**
 ```python
@@ -31,9 +30,6 @@ client.chat.completions.create(model="anthropic/claude-sonnet-4", ...)
 
 # Simple name
 client.chat.completions.create(model="sonnet", ...)
-
-# Use default from Claude Code settings
-client.chat.completions.create(model=None, ...)
 ```
 
 Unsupported model IDs return HTTP 400 with an error message listing valid options.
@@ -55,7 +51,7 @@ claude_code_bridge/
 - **Client Pool**: Pre-spawns `ClaudeSDKClient` instances for reduced latency. Uses `/clear` command between requests to reset conversation state while keeping subprocesses warm.
 - **Concurrency**: Pool size controls concurrent requests (default: 3, configurable via `POOL_SIZE` env var)
 - **Streaming**: SSE format matching OpenAI's streaming response
-- **Model selection**: Resolves OpenRouter slugs to Claude Code models via `/model` command. Uses user defaults when no model specified.
+- **Model selection**: Resolves OpenRouter slugs to Claude Code models via `/model` command. Model parameter is required.
 - **User settings**: Uses `setting_sources=["user"]` to load user's Claude Code settings (including default model)
 - **System prompt**: Uses `system_prompt={"type": "preset", "preset": "claude_code"}` to preserve the default Claude Code system prompt
 

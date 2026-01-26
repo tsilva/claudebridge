@@ -79,11 +79,11 @@ def format_messages(messages: list[Message]) -> str:
     return prompt
 
 
-async def call_claude_sdk(prompt: str, model: str | None, logger: SessionLogger) -> str:
+async def call_claude_sdk(prompt: str, model: str, logger: SessionLogger) -> str:
     """Call Claude Code SDK using pooled client and return response text.
 
-    Model selection: If an OpenRouter-style slug or simple name (opus/sonnet/haiku)
-    is provided, it will be resolved and used. Otherwise, user's default is used.
+    Model selection: OpenRouter-style slugs or simple names (opus/sonnet/haiku)
+    are resolved to Claude Code model identifiers.
     """
     resolved_model = resolve_model(model)
 
@@ -121,11 +121,11 @@ async def call_claude_sdk(prompt: str, model: str | None, logger: SessionLogger)
     return response_text
 
 
-async def stream_claude_sdk(prompt: str, model: str | None, request_id: str, logger: SessionLogger):
+async def stream_claude_sdk(prompt: str, model: str, request_id: str, logger: SessionLogger):
     """Stream Claude Code SDK response as SSE chunks using pooled client.
 
-    Model selection: If an OpenRouter-style slug or simple name (opus/sonnet/haiku)
-    is provided, it will be resolved and used. Otherwise, user's default is used.
+    Model selection: OpenRouter-style slugs or simple names (opus/sonnet/haiku)
+    are resolved to Claude Code model identifiers.
     """
     resolved_model = resolve_model(model)
     created = int(time.time())
@@ -193,7 +193,7 @@ async def chat_completions(request: ChatCompletionRequest):
 
     Note: Concurrency is managed by the client pool (POOL_SIZE env var).
     Model selection supports OpenRouter-style slugs (e.g., anthropic/claude-sonnet-4)
-    or simple names (opus, sonnet, haiku). If no model is provided, uses user defaults.
+    or simple names (opus, sonnet, haiku). Model parameter is required.
     """
     # Validate model early to fail fast
     try:

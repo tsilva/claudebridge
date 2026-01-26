@@ -10,7 +10,7 @@ class Message(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str | None = None  # None = use local Claude Code settings
+    model: str
     messages: list[Message]
     temperature: float | None = None
     max_tokens: int | None = None
@@ -38,7 +38,7 @@ class ChatCompletionResponse(BaseModel):
     id: str
     object: str = "chat.completion"
     created: int
-    model: str | None = None  # None when using local Claude Code settings
+    model: str
     choices: list[Choice]
     usage: Usage = Field(default_factory=Usage)
 
@@ -58,7 +58,7 @@ class ChatCompletionChunk(BaseModel):
     id: str
     object: str = "chat.completion.chunk"
     created: int
-    model: str | None = None  # None when using local Claude Code settings
+    model: str
     choices: list[StreamChoice]
 
 

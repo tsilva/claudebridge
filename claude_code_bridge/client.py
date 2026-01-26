@@ -41,12 +41,12 @@ class BridgeClient:
             base_url: API base URL (default: $BRIDGE_URL or http://localhost:8000)
             api_key: API key (default: $OPENROUTER_API_KEY or "not-needed")
             timeout: Request timeout in seconds (default: 300)
-            model: Default model to use (default: $OPENROUTER_MODEL or "default")
+            model: Default model to use (default: $OPENROUTER_MODEL or "sonnet")
         """
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self.api_key = api_key or DEFAULT_API_KEY or "not-needed"
         self.timeout = timeout
-        self.model = model or DEFAULT_MODEL or "default"
+        self.model = model or DEFAULT_MODEL or "sonnet"
 
         # Ensure /v1 suffix for OpenAI clients
         self._openai_base_url = self.base_url
@@ -359,8 +359,8 @@ def _cli_main() -> None:
     )
     parser.add_argument(
         "--model", "-m",
-        default=DEFAULT_MODEL,
-        help="Model to use (default: $OPENROUTER_MODEL or 'default')",
+        default=DEFAULT_MODEL or "sonnet",
+        help="Model to use (default: $OPENROUTER_MODEL or 'sonnet')",
     )
     parser.add_argument(
         "--url", "-u",

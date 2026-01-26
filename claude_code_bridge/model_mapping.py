@@ -51,21 +51,18 @@ class UnsupportedModelError(ValueError):
         )
 
 
-def resolve_model(model: str | None) -> str | None:
+def resolve_model(model: str) -> str:
     """Resolve an OpenRouter-style slug or simple name to a Claude Code model.
 
     Args:
-        model: Model identifier (OpenRouter slug, simple name, or None)
+        model: Model identifier (OpenRouter slug or simple name)
 
     Returns:
-        Claude Code model identifier (opus, sonnet, haiku) or None for user default
+        Claude Code model identifier (opus, sonnet, haiku)
 
     Raises:
-        UnsupportedModelError: If model is provided but not recognized
+        UnsupportedModelError: If model is not recognized
     """
-    if model is None:
-        return None
-
     # Already a simple Claude Code name
     if model.lower() in SIMPLE_NAMES:
         return model.lower()
