@@ -1,12 +1,30 @@
 """OpenAI-compatible request/response models."""
 
-from typing import Literal
+from typing import Literal, Union
 from pydantic import BaseModel, Field
+
+
+# Multimodal content types (OpenAI format)
+class ImageUrl(BaseModel):
+    url: str  # data:image/xxx;base64,... or https://...
+
+
+class ImageUrlContent(BaseModel):
+    type: Literal["image_url"]
+    image_url: ImageUrl
+
+
+class TextContent(BaseModel):
+    type: Literal["text"]
+    text: str
+
+
+ContentPart = Union[TextContent, ImageUrlContent]
 
 
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: str | list[ContentPart]  # Backward compatible: string or list of parts
 
 
 class ChatCompletionRequest(BaseModel):

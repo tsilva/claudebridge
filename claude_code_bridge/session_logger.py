@@ -4,6 +4,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .image_utils import extract_text_from_content
+
 
 class SessionLogger:
     """Logs a single Claude request/response session to a plain text file."""
@@ -58,10 +60,10 @@ class SessionLogger:
             "Messages:",
         ]
 
-        # Format messages
+        # Format messages (handle both text-only and multimodal)
         for msg in messages:
             role = msg.role
-            content = msg.content
+            content = extract_text_from_content(msg.content)
             lines.append(f"[{role}] {content}")
 
         lines.extend([

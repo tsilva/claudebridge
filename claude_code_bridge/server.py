@@ -32,6 +32,7 @@ from .models import (
 from .model_mapping import resolve_model, AVAILABLE_MODELS, UnsupportedModelError
 from .pool import ClientPool
 from .session_logger import SessionLogger
+from .image_utils import has_multimodal_content, openai_content_to_claude
 
 # Pool configuration
 POOL_SIZE = int(os.environ.get("POOL_SIZE", 3))
@@ -54,18 +55,29 @@ app = FastAPI(title="Claude Code Bridge", version="0.1.0", lifespan=lifespan)
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
 
 
-def format_messages(messages: list[Message]) -> str:
-    """Convert OpenAI-style messages to a single prompt string."""
+def format_messages(messages: list[Message]) -> str | list[dict]:
+    """Convert OpenAI-style messages to Claude format.
+
+    Returns:
+        str: For text-only messages, returns formatted prompt string
+        list[dict]: For multimodal messages, returns Claude-style content array
+    """
+    # Check if we have multimodal content
+    if has_multimodal_content(messages):
+        return format_multimodal_messages(messages)
+
+    # Text-only path: return formatted string
     parts = []
     system_prompt = None
 
     for msg in messages:
+        content = msg.content if isinstance(msg.content, str) else extract_text_content(msg.content)
         if msg.role == "system":
-            system_prompt = msg.content
+            system_prompt = content
         elif msg.role == "user":
-            parts.append(f"User: {msg.content}")
+            parts.append(f"User: {content}")
         elif msg.role == "assistant":
-            parts.append(f"Assistant: {msg.content}")
+            parts.append(f"Assistant: {content}")
 
     prompt = "\n\n".join(parts)
     if system_prompt:
@@ -74,8 +86,58 @@ def format_messages(messages: list[Message]) -> str:
     return prompt
 
 
-async def call_claude_sdk(prompt: str, model: str, logger: SessionLogger) -> str:
+def extract_text_content(content_parts: list) -> str:
+    """Extract text from content parts list."""
+    texts = []
+    for part in content_parts:
+        if hasattr(part, "type") and part.type == "text":
+            texts.append(part.text)
+    return " ".join(texts)
+
+
+def format_multimodal_messages(messages: list[Message]) -> list[dict]:
+    """Format messages with image content for Claude SDK.
+
+    Builds a flat content array combining text and images from all messages.
+    Prefixes user/assistant messages with role labels for context.
+    """
+    content_blocks = []
+    system_prompt = None
+
+    for msg in messages:
+        if msg.role == "system":
+            # Extract system prompt text
+            if isinstance(msg.content, str):
+                system_prompt = msg.content
+            else:
+                system_prompt = extract_text_content(msg.content)
+        else:
+            # Build content for user/assistant messages
+            role_prefix = "User" if msg.role == "user" else "Assistant"
+            claude_content = openai_content_to_claude(msg.content)
+
+            # Add role prefix to first text block, or prepend new text block
+            if claude_content and claude_content[0].get("type") == "text":
+                claude_content[0]["text"] = f"{role_prefix}: {claude_content[0]['text']}"
+            else:
+                content_blocks.append({"type": "text", "text": f"{role_prefix}:"})
+
+            content_blocks.extend(claude_content)
+
+    # Prepend system prompt if present
+    if system_prompt:
+        content_blocks.insert(0, {"type": "text", "text": f"System: {system_prompt}"})
+
+    return content_blocks
+
+
+async def call_claude_sdk(prompt: str | list[dict], model: str, logger: SessionLogger) -> str:
     """Call Claude Code SDK using pooled client and return response text.
+
+    Args:
+        prompt: Either a string (text-only) or list of content blocks (multimodal)
+        model: Model identifier (OpenRouter slug or simple name)
+        logger: Session logger for recording the interaction
 
     Model selection: OpenRouter-style slugs or simple names (opus/sonnet/haiku)
     are resolved to Claude Code model identifiers. Pool replaces clients
@@ -110,8 +172,14 @@ async def call_claude_sdk(prompt: str, model: str, logger: SessionLogger) -> str
     return response_text
 
 
-async def stream_claude_sdk(prompt: str, model: str, request_id: str, logger: SessionLogger):
+async def stream_claude_sdk(prompt: str | list[dict], model: str, request_id: str, logger: SessionLogger):
     """Stream Claude Code SDK response as SSE chunks using pooled client.
+
+    Args:
+        prompt: Either a string (text-only) or list of content blocks (multimodal)
+        model: Model identifier (OpenRouter slug or simple name)
+        request_id: Unique request identifier for response chunks
+        logger: Session logger for recording the interaction
 
     Model selection: OpenRouter-style slugs or simple names (opus/sonnet/haiku)
     are resolved to Claude Code model identifiers. Pool replaces clients
