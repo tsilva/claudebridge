@@ -17,6 +17,7 @@ def make_options(model: str) -> ClaudeAgentOptions:
         setting_sources=["user"],
         system_prompt={"type": "preset", "preset": "claude_code"},
         model=model,
+        env={"CLAUDE_CODE_BRIDGE": "1"},
     )
 
 
