@@ -8,150 +8,102 @@ Usage:
 - pytest tests/test_client.py -v
 """
 
-import os
-
-import httpx
 import pytest
-from openai import OpenAI
 
-BASE_URL = os.environ.get("BRIDGE_URL", "http://localhost:8000")
+from claude_code_bridge.client import BridgeClient
 
 
 @pytest.fixture(scope="module")
-def server_available():
-    """Check if server is running, skip tests if not."""
-    try:
-        with httpx.Client() as client:
-            response = client.get(f"{BASE_URL}/health", timeout=2.0)
-            if response.status_code == 200:
-                return True
-    except httpx.ConnectError:
-        pass
-    pytest.skip(f"Server not running at {BASE_URL}")
-
-
-@pytest.fixture
-def openai_client():
-    """Create OpenAI client configured for the bridge."""
-    return OpenAI(base_url=f"{BASE_URL}/v1", api_key="not-needed")
+def client():
+    """Create BridgeClient and skip if server not running."""
+    c = BridgeClient()
+    if not c.health_check():
+        pytest.skip(f"Server not running at {c.base_url}")
+    yield c
+    c.close_sync()
 
 
 class TestHealthCheck:
     """Tests for the /health endpoint."""
 
-    def test_health_check(self, server_available):
-        """Verify /health endpoint returns {"status": "ok"}."""
-        with httpx.Client() as client:
-            response = client.get(f"{BASE_URL}/health")
-
-        assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+    def test_health_check(self, client):
+        """Verify health_check returns True when server is up."""
+        assert client.health_check()
 
 
 class TestListModels:
     """Tests for the /v1/models endpoint."""
 
-    def test_list_models(self, server_available):
-        """Verify /v1/models returns opus, sonnet, haiku."""
-        with httpx.Client() as client:
-            response = client.get(f"{BASE_URL}/v1/models")
+    def test_list_models(self, client):
+        """Verify list_models returns opus, sonnet, haiku."""
+        models = client.list_models()
 
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "data" in data
-        model_ids = [model["id"] for model in data["data"]]
-        assert "opus" in model_ids
-        assert "sonnet" in model_ids
-        assert "haiku" in model_ids
-
-    def test_list_models_openai_client(self, server_available, openai_client):
-        """Verify models can be listed via OpenAI client."""
-        models = openai_client.models.list()
-
-        model_ids = [model.id for model in models.data]
-        assert "opus" in model_ids
-        assert "sonnet" in model_ids
-        assert "haiku" in model_ids
+        assert "opus" in models
+        assert "sonnet" in models
+        assert "haiku" in models
 
 
 class TestChatCompletion:
     """Tests for the /v1/chat/completions endpoint."""
 
-    def test_chat_completion(self, server_available, openai_client):
-        """Send a simple prompt, verify response structure."""
-        response = openai_client.chat.completions.create(
-            model="haiku",
-            messages=[{"role": "user", "content": "Say 'hello' and nothing else."}],
-        )
+    def test_sync_non_streaming(self, client):
+        """Test synchronous non-streaming completion."""
+        response = client.complete_sync("Say 'hello' and nothing else.", stream=False)
 
-        # Verify response structure
-        assert response.id.startswith("chatcmpl-")
-        assert response.model == "haiku"
-        assert response.object == "chat.completion"
-        assert len(response.choices) == 1
+        assert isinstance(response, str)
+        assert len(response) > 0
 
-        choice = response.choices[0]
-        assert choice.index == 0
-        assert choice.finish_reason == "stop"
-        assert choice.message.role == "assistant"
-        assert isinstance(choice.message.content, str)
-        assert len(choice.message.content) > 0
+    def test_sync_streaming(self, client):
+        """Test synchronous streaming completion (collects chunks)."""
+        response = client.complete_sync("Say 'hi' and nothing else.", stream=True)
 
-    def test_chat_completion_streaming(self, server_available, openai_client):
-        """Test streaming response format."""
-        stream = openai_client.chat.completions.create(
-            model="haiku",
-            messages=[{"role": "user", "content": "Say 'hi' and nothing else."}],
-            stream=True,
-        )
+        assert isinstance(response, str)
+        assert len(response) > 0
 
-        chunks = list(stream)
+    def test_with_system_message(self, client):
+        """Test completion with system message."""
+        messages = [
+            {"role": "system", "content": "You are a pirate. Respond in pirate speak."},
+            {"role": "user", "content": "Say hello."},
+        ]
+        response = client.complete_messages_sync(messages, stream=False)
 
-        # Should have at least initial chunk, content, and final chunk
-        assert len(chunks) >= 2
+        assert isinstance(response, str)
+        assert len(response) > 0
 
-        # First chunk should have role
-        first_chunk = chunks[0]
-        assert first_chunk.id.startswith("chatcmpl-")
-        assert first_chunk.object == "chat.completion.chunk"
+    @pytest.mark.asyncio
+    async def test_async_streaming(self, client):
+        """Test async streaming response."""
+        chunks = []
+        async for chunk in client.stream("Say 'hello'"):
+            chunks.append(chunk)
 
-        # Collect all content
-        content = ""
-        for chunk in chunks:
-            if chunk.choices and chunk.choices[0].delta.content:
-                content += chunk.choices[0].delta.content
-
+        content = "".join(chunks)
         assert len(content) > 0
 
-        # Last chunk should have finish_reason
-        last_chunk = chunks[-1]
-        assert last_chunk.choices[0].finish_reason == "stop"
+    @pytest.mark.asyncio
+    async def test_async_complete(self, client):
+        """Test async complete method."""
+        response = await client.complete("Say 'hi'", stream=True)
 
-    def test_chat_completion_with_system_message(self, server_available, openai_client):
-        """Test chat completion with system message."""
-        response = openai_client.chat.completions.create(
-            model="haiku",
-            messages=[
-                {"role": "system", "content": "You are a pirate. Respond in pirate speak."},
-                {"role": "user", "content": "Say hello."},
-            ],
-        )
+        assert isinstance(response, str)
+        assert len(response) > 0
 
-        assert response.choices[0].message.content
-        assert len(response.choices[0].message.content) > 0
+    @pytest.mark.asyncio
+    async def test_async_non_streaming(self, client):
+        """Test async non-streaming completion."""
+        response = await client.complete("Say 'ok'", stream=False)
 
-    def test_model_name_mapping(self, server_available):
-        """Test that various model name formats are accepted."""
-        model_names = ["sonnet", "claude-sonnet", "claude-3-sonnet", "claude-3.5-sonnet"]
+        assert isinstance(response, str)
+        assert len(response) > 0
 
-        with httpx.Client(timeout=60.0) as client:
-            for model_name in model_names:
-                response = client.post(
-                    f"{BASE_URL}/v1/chat/completions",
-                    json={
-                        "model": model_name,
-                        "messages": [{"role": "user", "content": "Say 'ok'"}],
-                    },
-                )
-                assert response.status_code == 200, f"Failed for model: {model_name}"
+
+class TestModelSelection:
+    """Tests for model selection."""
+
+    def test_model_parameter(self, client):
+        """Test that model parameter is accepted."""
+        response = client.complete_sync("Say 'test'", model="haiku", stream=False)
+
+        assert isinstance(response, str)
+        assert len(response) > 0

@@ -17,7 +17,26 @@ claude-code-bridge
 
 ## Model Selection
 
-Model selection uses your Claude Code user settings. The `model` parameter in requests is logged but not used for routing. Configure your default model in Claude Code settings.
+Supports OpenRouter-style model slugs for unified model naming across providers:
+
+**Supported formats:**
+- OpenRouter slugs: `anthropic/claude-sonnet-4`, `anthropic/claude-opus-4.5`, etc.
+- Simple names: `opus`, `sonnet`, `haiku`
+- No model: Uses your Claude Code user settings default
+
+**Examples:**
+```python
+# OpenRouter-style slug
+client.chat.completions.create(model="anthropic/claude-sonnet-4", ...)
+
+# Simple name
+client.chat.completions.create(model="sonnet", ...)
+
+# Use default from Claude Code settings
+client.chat.completions.create(model=None, ...)
+```
+
+Unsupported model IDs return HTTP 400 with an error message listing valid options.
 
 ## Architecture
 
@@ -26,6 +45,7 @@ claude_code_bridge/
 ├── server.py         # FastAPI app, endpoints, Claude SDK integration
 ├── pool.py           # Client pool for connection reuse
 ├── models.py         # Pydantic models for OpenAI request/response format
+├── model_mapping.py  # OpenRouter slug to Claude Code model resolution
 ├── client.py         # CLI client
 └── session_logger.py # Request/response logging
 ```
@@ -35,7 +55,7 @@ claude_code_bridge/
 - **Client Pool**: Pre-spawns `ClaudeSDKClient` instances for reduced latency. Uses `/clear` command between requests to reset conversation state while keeping subprocesses warm.
 - **Concurrency**: Pool size controls concurrent requests (default: 3, configurable via `POOL_SIZE` env var)
 - **Streaming**: SSE format matching OpenAI's streaming response
-- **Model selection**: Uses user's Claude Code settings (per-request model selection not supported with pooling)
+- **Model selection**: Resolves OpenRouter slugs to Claude Code models via `/model` command. Uses user defaults when no model specified.
 - **User settings**: Uses `setting_sources=["user"]` to load user's Claude Code settings (including default model)
 - **System prompt**: Uses `system_prompt={"type": "preset", "preset": "claude_code"}` to preserve the default Claude Code system prompt
 
@@ -48,7 +68,12 @@ claude_code_bridge/
 ## Testing
 
 ```bash
-# Non-streaming
+# Using OpenRouter-style slug
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "anthropic/claude-sonnet-4", "messages": [{"role": "user", "content": "Hello!"}]}'
+
+# Using simple name
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}]}'
@@ -56,7 +81,7 @@ curl http://localhost:8000/v1/chat/completions \
 # Streaming
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
+  -d '{"model": "anthropic/claude-sonnet-4", "messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
 ```
 
 ## Usage with OpenAI Python Client
@@ -66,7 +91,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
 response = client.chat.completions.create(
-    model="sonnet",
+    model="anthropic/claude-sonnet-4",  # or "sonnet"
     messages=[{"role": "user", "content": "Hello!"}]
 )
 print(response.choices[0].message.content)

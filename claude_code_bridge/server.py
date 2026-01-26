@@ -29,6 +29,7 @@ from .models import (
     ModelList,
     ModelInfo,
 )
+from .model_mapping import resolve_model, AVAILABLE_MODELS, UnsupportedModelError
 from .pool import ClientPool
 from .session_logger import SessionLogger
 
@@ -57,9 +58,6 @@ app = FastAPI(title="Claude Code Bridge", version="0.1.0", lifespan=lifespan)
 # Timeout for Claude SDK calls (in seconds)
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
 
-# Available models (for /v1/models endpoint)
-AVAILABLE_MODELS = ["opus", "sonnet", "haiku"]
-
 
 def format_messages(messages: list[Message]) -> str:
     """Convert OpenAI-style messages to a single prompt string."""
@@ -84,12 +82,21 @@ def format_messages(messages: list[Message]) -> str:
 async def call_claude_sdk(prompt: str, model: str | None, logger: SessionLogger) -> str:
     """Call Claude Code SDK using pooled client and return response text.
 
-    Note: Model selection is determined by pool configuration, not per-request.
-    The 'model' parameter is logged but not used for routing.
+    Model selection: If an OpenRouter-style slug or simple name (opus/sonnet/haiku)
+    is provided, it will be resolved and used. Otherwise, user's default is used.
     """
+    resolved_model = resolve_model(model)
+
     async def _query():
         response_text = ""
         async with pool.acquire() as client:
+            # Set model if specified
+            if resolved_model:
+                await client.query(f"/model {resolved_model}")
+                async for msg in client.receive_response():
+                    if isinstance(msg, ResultMessage):
+                        break
+
             await client.query(prompt)
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
@@ -117,9 +124,10 @@ async def call_claude_sdk(prompt: str, model: str | None, logger: SessionLogger)
 async def stream_claude_sdk(prompt: str, model: str | None, request_id: str, logger: SessionLogger):
     """Stream Claude Code SDK response as SSE chunks using pooled client.
 
-    Note: Model selection is determined by pool configuration, not per-request.
-    The 'model' parameter is used for response metadata only.
+    Model selection: If an OpenRouter-style slug or simple name (opus/sonnet/haiku)
+    is provided, it will be resolved and used. Otherwise, user's default is used.
     """
+    resolved_model = resolve_model(model)
     created = int(time.time())
     start_time = time.monotonic()
 
@@ -134,6 +142,13 @@ async def stream_claude_sdk(prompt: str, model: str | None, request_id: str, log
 
     try:
         async with pool.acquire() as client:
+            # Set model if specified
+            if resolved_model:
+                await client.query(f"/model {resolved_model}")
+                async for msg in client.receive_response():
+                    if isinstance(msg, ResultMessage):
+                        break
+
             await client.query(prompt)
             async for msg in client.receive_response():
                 # Check timeout
@@ -177,8 +192,15 @@ async def chat_completions(request: ChatCompletionRequest):
     """OpenAI-compatible chat completions endpoint.
 
     Note: Concurrency is managed by the client pool (POOL_SIZE env var).
-    Model selection uses user's Claude Code settings, not the request model.
+    Model selection supports OpenRouter-style slugs (e.g., anthropic/claude-sonnet-4)
+    or simple names (opus, sonnet, haiku). If no model is provided, uses user defaults.
     """
+    # Validate model early to fail fast
+    try:
+        resolve_model(request.model)
+    except UnsupportedModelError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     request_id = f"chatcmpl-{uuid4().hex[:12]}"
     prompt = format_messages(request.messages)
     logger = SessionLogger(request_id, request.model)
@@ -213,9 +235,9 @@ async def chat_completions(request: ChatCompletionRequest):
 
 @app.get("/v1/models")
 async def list_models():
-    """List available models."""
+    """List available models with OpenRouter-style slugs."""
     return ModelList(
-        data=[ModelInfo(id=model) for model in AVAILABLE_MODELS]
+        data=[ModelInfo(id=m["slug"]) for m in AVAILABLE_MODELS]
     )
 
 
