@@ -4,10 +4,13 @@ import argparse
 import asyncio
 import os
 import sys
-import json
 
-import httpx
+import openai
+from openai import AsyncOpenAI
+from dotenv import load_dotenv
 
+# Load .env file from current directory or parents
+load_dotenv()
 
 # Configuration via environment variables (OpenRouter-compatible)
 DEFAULT_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "http://localhost:8000")
@@ -15,17 +18,8 @@ DEFAULT_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 DEFAULT_MODEL = os.environ.get("OPENROUTER_MODEL")
 
 
-def get_auth_headers(api_key: str | None) -> dict[str, str]:
-    """Build headers dict, including Authorization if API key provided."""
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    return headers
-
-
 async def stream_response_async(
-    client: httpx.AsyncClient,
-    url: str,
+    client: AsyncOpenAI,
     model: str | None,
     prompt: str,
     index: int,
@@ -35,38 +29,28 @@ async def stream_response_async(
     if delay > 0:
         await asyncio.sleep(delay)
 
-    payload = {
+    kwargs = {
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
     }
     if model:
-        payload["model"] = model
+        kwargs["model"] = model
+    else:
+        # OpenAI client requires a model, use placeholder that server will map
+        kwargs["model"] = "default"
 
     chunks: list[str] = []
 
-    async with client.stream("POST", f"{url}/v1/chat/completions", json=payload) as response:
-        response.raise_for_status()
-        async for line in response.aiter_lines():
-            if not line:
-                continue
-            if line.startswith("data: "):
-                data = line[6:]
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if content:
-                        chunks.append(content)
-                except json.JSONDecodeError:
-                    continue
+    stream = await client.chat.completions.create(**kwargs)
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            chunks.append(chunk.choices[0].delta.content)
 
     return index, "".join(chunks)
 
 
 async def get_response_async(
-    client: httpx.AsyncClient,
-    url: str,
+    client: AsyncOpenAI,
     model: str | None,
     prompt: str,
     index: int,
@@ -76,19 +60,20 @@ async def get_response_async(
     if delay > 0:
         await asyncio.sleep(delay)
 
-    payload = {
+    kwargs = {
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
     }
     if model:
-        payload["model"] = model
+        kwargs["model"] = model
+    else:
+        # OpenAI client requires a model, use placeholder that server will map
+        kwargs["model"] = "default"
 
-    response = await client.post(f"{url}/v1/chat/completions", json=payload)
-    response.raise_for_status()
-    data = response.json()
-    content = data["choices"][0]["message"]["content"]
+    response = await client.chat.completions.create(**kwargs)
+    content = response.choices[0].message.content
 
-    return index, content
+    return index, content or ""
 
 
 async def run_parallel(
@@ -103,15 +88,23 @@ async def run_parallel(
     show_index = count > 1
     stagger_delay = 0.1  # 100ms between request launches
 
-    async with httpx.AsyncClient(
+    # Ensure base_url ends with /v1 for OpenAI client
+    base_url = url.rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
+
+    client = AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key or "not-needed",
         timeout=300.0,
-        headers=get_auth_headers(api_key),
-    ) as client:
+    )
+
+    try:
         if stream:
             tasks = [
                 asyncio.create_task(
                     stream_response_async(
-                        client, url, model, prompt, i + 1,
+                        client, model, prompt, i + 1,
                         delay=i * stagger_delay,
                     )
                 )
@@ -121,7 +114,7 @@ async def run_parallel(
             tasks = [
                 asyncio.create_task(
                     get_response_async(
-                        client, url, model, prompt, i + 1,
+                        client, model, prompt, i + 1,
                         delay=i * stagger_delay,
                     )
                 )
@@ -134,6 +127,8 @@ async def run_parallel(
             prefix = f"[{index}] " if show_index else ""
             print(f"{prefix}{content}")
             print()  # Blank line between responses
+    finally:
+        await client.close()
 
 
 def main() -> None:
@@ -215,16 +210,16 @@ def main() -> None:
             stream=not args.no_stream,
             api_key=args.api_key,
         ))
-    except httpx.ConnectError:
+    except openai.APIConnectionError:
         print(f"Error: Could not connect to {args.url}", file=sys.stderr)
         print("Make sure the server is running.", file=sys.stderr)
         sys.exit(1)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (401, 403):
-            print("Error: Authentication failed", file=sys.stderr)
-            print("Check your API key (--api-key or $OPENROUTER_API_KEY)", file=sys.stderr)
-        else:
-            print(f"Error: HTTP {e.response.status_code}", file=sys.stderr)
+    except openai.AuthenticationError:
+        print("Error: Authentication failed", file=sys.stderr)
+        print("Check your API key (--api-key or $OPENROUTER_API_KEY)", file=sys.stderr)
+        sys.exit(1)
+    except openai.APIStatusError as e:
+        print(f"Error: HTTP {e.status_code}", file=sys.stderr)
         sys.exit(1)
 
 
