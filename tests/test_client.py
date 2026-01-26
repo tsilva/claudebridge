@@ -14,7 +14,7 @@ import httpx
 import pytest
 from openai import OpenAI
 
-BASE_URL = os.environ.get("PROXY_URL", "http://localhost:8000")
+BASE_URL = os.environ.get("BRIDGE_URL", "http://localhost:8000")
 
 
 @pytest.fixture(scope="module")
@@ -32,7 +32,7 @@ def server_available():
 
 @pytest.fixture
 def openai_client():
-    """Create OpenAI client configured for the proxy."""
+    """Create OpenAI client configured for the bridge."""
     return OpenAI(base_url=f"{BASE_URL}/v1", api_key="not-needed")
 
 

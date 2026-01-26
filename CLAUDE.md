@@ -22,9 +22,11 @@ claude-code-bridge
 ## Architecture
 
 ```
-claude_proxy/
-├── server.py   # FastAPI app, endpoints, Claude SDK integration
-└── models.py   # Pydantic models for OpenAI request/response format
+claude_code_bridge/
+├── server.py         # FastAPI app, endpoints, Claude SDK integration
+├── models.py         # Pydantic models for OpenAI request/response format
+├── client.py         # CLI client
+└── session_logger.py # Request/response logging
 ```
 
 ## Key Implementation Details
