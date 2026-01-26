@@ -1,24 +1,24 @@
 <div align="center">
+  <img src="logo.png" alt="claude-code-bridge" width="512"/>
 
-# claude-code-bridge
+  # claude-code-bridge
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+  [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
+  [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
+  [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**🌉 Bridge OpenAI-compatible tools to Claude Code SDK — use your Claude subscription with any OpenAI client**
+  **Bridge OpenAI-compatible tools to Claude Code SDK — use your Claude subscription with any OpenAI client**
 
 </div>
 
 ## Features
 
-- ⚡ **Lightweight** — ~200 lines of Python, minimal dependencies
-- 🔄 **OpenAI-compatible** — Drop-in replacement for `/v1/chat/completions`
-- 💰 **Uses your subscription** — No API keys needed, uses Claude Code OAuth
-- 🌊 **Streaming support** — Real-time SSE responses matching OpenAI format
-- 🔀 **Concurrent requests** — Handles multiple requests with semaphore limiting
-- 📝 **Session logging** — Full request/response logging for debugging
-- 🎯 **Local model defaults** — Omit model to use your Claude Code settings
+- **Lightweight** — ~200 lines of Python, minimal dependencies
+- **OpenAI-compatible** — Drop-in replacement for `/v1/chat/completions`
+- **Uses your subscription** — No API keys needed, uses Claude Code OAuth
+- **Streaming support** — Real-time SSE responses matching OpenAI format
+- **Connection pooling** — Pre-spawned clients for reduced latency
+- **Session logging** — Full request/response logging for debugging
 
 ## Quick Start
 
@@ -42,20 +42,15 @@ Server starts at `http://localhost:8000`
 ### With curl
 
 ```bash
-# Use your local Claude Code model settings (omit model)
+# Non-streaming
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
+  -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}]}'
 
-# Or specify a model explicitly
+# Streaming
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "sonnet",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
+  -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
 ```
 
 ### With OpenAI Python Client
@@ -89,25 +84,68 @@ for chunk in stream:
 
 ### CLI Client
 
+The CLI client can be used for ad-hoc testing:
+
 ```bash
 # Direct prompt
-claude-code-client "What is Python?"
+python -m claude_code_bridge.client "What is Python?"
 
 # Pipe from stdin
-echo "Hello" | claude-code-client
+echo "Hello" | python -m claude_code_bridge.client
 
 # Use different model
-claude-code-client --model opus "Explain decorators"
+python -m claude_code_bridge.client --model opus "Explain decorators"
 
 # Non-streaming mode
-claude-code-client --no-stream "Quick answer"
+python -m claude_code_bridge.client --no-stream "Quick answer"
+
+# Multiple parallel requests
+python -m claude_code_bridge.client -n 3 "Hello"
+```
+
+### BridgeClient Library
+
+Use `BridgeClient` programmatically for testing or integration:
+
+```python
+from claude_code_bridge.client import BridgeClient
+
+# Sync usage
+with BridgeClient() as client:
+    if client.health_check():
+        models = client.list_models()
+        response = client.complete_sync("Hello!", stream=False)
+        print(response)
+
+# Async usage
+import asyncio
+
+async def main():
+    async with BridgeClient() as client:
+        response = await client.complete("Hello!")
+        print(response)
+
+        # Or stream chunks
+        async for chunk in client.stream("Tell me a story"):
+            print(chunk, end="")
+
+asyncio.run(main())
+```
+
+## Testing
+
+```bash
+# Install test dependencies
+uv pip install -e ".[test]"
+
+# Run the test suite (requires server running)
+uv run pytest tests/test_client.py -v
 ```
 
 ## Available Models
 
 | Model ID | Description |
 |----------|-------------|
-| *(omit)* | Use local Claude Code settings |
 | `opus` | Claude Opus (most capable) |
 | `sonnet` | Claude Sonnet (balanced) |
 | `haiku` | Claude Haiku (fastest) |
@@ -135,15 +173,25 @@ claude login
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8000` | Server port |
-| `MAX_CONCURRENT` | `3` | Max concurrent Claude SDK calls |
+| `POOL_SIZE` | `3` | Number of pooled clients |
+| `CLAUDE_TIMEOUT` | `120` | Request timeout in seconds |
+
+### Client Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BRIDGE_URL` | `http://localhost:8000` | API base URL |
+| `OPENROUTER_API_KEY` | - | API key (if needed) |
+| `OPENROUTER_MODEL` | `default` | Default model |
 
 ## Architecture
 
 ```
 claude_code_bridge/
 ├── server.py         # FastAPI app, endpoints, Claude SDK integration
+├── pool.py           # Client pool for connection reuse
 ├── models.py         # Pydantic models for OpenAI request/response format
-├── client.py         # CLI client
+├── client.py         # BridgeClient library + CLI
 └── session_logger.py # Request/response logging
 ```
 
