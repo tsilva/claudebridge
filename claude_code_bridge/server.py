@@ -39,7 +39,6 @@ from .session_logger import SessionLogger
 from .image_utils import has_multimodal_content, openai_content_to_claude
 
 # Pool configuration
-POOL_SIZE = int(os.environ.get("POOL_SIZE", 1))
 pool: ClientPool | None = None
 
 
@@ -47,7 +46,8 @@ pool: ClientPool | None = None
 async def lifespan(app: FastAPI):
     """Manage application lifespan - initialize and shutdown pool."""
     global pool
-    pool = ClientPool(size=POOL_SIZE, default_model="opus")
+    pool_size = int(os.environ.get("POOL_SIZE", 1))
+    pool = ClientPool(size=pool_size, default_model="opus")
     await pool.initialize()
     yield
     await pool.shutdown()
