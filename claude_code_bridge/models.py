@@ -4,6 +4,39 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field
 
 
+# Tool-related types (OpenAI format)
+class FunctionDefinition(BaseModel):
+    name: str
+    description: str | None = None
+    parameters: dict | None = None
+
+
+class Tool(BaseModel):
+    type: Literal["function"]
+    function: FunctionDefinition
+
+
+class ToolChoiceFunction(BaseModel):
+    name: str
+
+
+class ToolChoiceObject(BaseModel):
+    type: Literal["function"]
+    function: ToolChoiceFunction
+
+
+# Tool call types for responses
+class FunctionCall(BaseModel):
+    name: str
+    arguments: str  # JSON string
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: Literal["function"] = "function"
+    function: FunctionCall
+
+
 # Multimodal content types (OpenAI format)
 class ImageUrl(BaseModel):
     url: str  # data:image/xxx;base64,... or https://...
@@ -24,7 +57,8 @@ ContentPart = Annotated[Union[TextContent, ImageUrlContent], Field(discriminator
 
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: str | list[ContentPart]  # Backward compatible: string or list of parts
+    content: str | list[ContentPart] | None = None  # None when tool_calls present
+    tool_calls: list[ToolCall] | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -33,6 +67,9 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     stream: bool = False
+    # Tool calling support
+    tools: list[Tool] | None = None
+    tool_choice: ToolChoiceObject | str | None = None  # "auto", "none", or specific
     # Additional fields ignored but accepted for compatibility
     top_p: float | None = None
     frequency_penalty: float | None = None
@@ -43,7 +80,7 @@ class ChatCompletionRequest(BaseModel):
 class Choice(BaseModel):
     index: int = 0
     message: Message
-    finish_reason: str = "stop"
+    finish_reason: str = "stop"  # "stop" or "tool_calls"
 
 
 class Usage(BaseModel):
@@ -64,6 +101,7 @@ class ChatCompletionResponse(BaseModel):
 class DeltaMessage(BaseModel):
     role: str | None = None
     content: str | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 class StreamChoice(BaseModel):

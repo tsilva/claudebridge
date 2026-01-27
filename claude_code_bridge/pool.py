@@ -18,7 +18,7 @@ def make_options(model: str) -> ClaudeAgentOptions:
         system_prompt={"type": "preset", "preset": "claude_code"},
         model=model,
         env={"CLAUDE_CODE_BRIDGE": "1"},
-        tools=[],  # No tools - pure chat mode
+        tools=[],  # No built-in tools - pure chat mode
     )
 
 
