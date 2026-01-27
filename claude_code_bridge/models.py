@@ -1,6 +1,6 @@
 """OpenAI-compatible request/response models."""
 
-from typing import Literal, Union
+from typing import Annotated, Literal, Union
 from pydantic import BaseModel, Field
 
 
@@ -19,7 +19,7 @@ class TextContent(BaseModel):
     text: str
 
 
-ContentPart = Union[TextContent, ImageUrlContent]
+ContentPart = Annotated[Union[TextContent, ImageUrlContent], Field(discriminator='type')]
 
 
 class Message(BaseModel):

@@ -131,6 +131,21 @@ def format_multimodal_messages(messages: list[Message]) -> list[dict]:
     return content_blocks
 
 
+def make_multimodal_prompt(content_blocks: list[dict]):
+    """Create an async generator that yields a multimodal user message.
+
+    The Claude SDK's query() method accepts either a string or an async iterable.
+    For multimodal content (images), we need to pass an async iterable that yields
+    a properly formatted message with content blocks.
+    """
+    async def _gen():
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content_blocks},
+        }
+    return _gen()
+
+
 async def call_claude_sdk(prompt: str | list[dict], model: str, logger: SessionLogger) -> str:
     """Call Claude Code SDK using pooled client and return response text.
 
@@ -148,7 +163,11 @@ async def call_claude_sdk(prompt: str | list[dict], model: str, logger: SessionL
     async def _query():
         response_text = ""
         async with pool.acquire(resolved_model) as client:
-            await client.query(prompt)
+            # For multimodal content, create an async generator
+            if isinstance(prompt, list):
+                await client.query(make_multimodal_prompt(prompt))
+            else:
+                await client.query(prompt)
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
@@ -200,7 +219,11 @@ async def stream_claude_sdk(prompt: str | list[dict], model: str, request_id: st
 
     try:
         async with pool.acquire(resolved_model) as client:
-            await client.query(prompt)
+            # For multimodal content, create an async generator
+            if isinstance(prompt, list):
+                await client.query(make_multimodal_prompt(prompt))
+            else:
+                await client.query(prompt)
             async for msg in client.receive_response():
                 # Check timeout
                 if time.monotonic() - start_time > CLAUDE_TIMEOUT:

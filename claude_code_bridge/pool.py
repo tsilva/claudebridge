@@ -14,10 +14,11 @@ def make_options(model: str) -> ClaudeAgentOptions:
     """Create ClaudeAgentOptions with model."""
     return ClaudeAgentOptions(
         max_turns=1,
-        setting_sources=["user"],
+        setting_sources=None,  # Don't load user filesystem settings
         system_prompt={"type": "preset", "preset": "claude_code"},
         model=model,
         env={"CLAUDE_CODE_BRIDGE": "1"},
+        tools=[],  # No tools - pure chat mode
     )
 
 

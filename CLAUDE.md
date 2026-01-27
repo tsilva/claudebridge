@@ -52,7 +52,8 @@ claude_code_bridge/
 - **Concurrency**: Pool size controls concurrent requests (default: 3, configurable via `POOL_SIZE` env var)
 - **Streaming**: SSE format matching OpenAI's streaming response
 - **Model selection**: Resolves OpenRouter slugs to Claude Code models. Model parameter is required.
-- **User settings**: Uses `setting_sources=["user"]` to load user's Claude Code settings
+- **Pure chat mode**: Tools are disabled (`tools=[]`) - Claude operates as a conversational assistant without file access, bash commands, or web access
+- **Isolated settings**: Uses `setting_sources=None` to not load user filesystem settings, providing isolation
 - **System prompt**: Uses `system_prompt={"type": "preset", "preset": "claude_code"}` to preserve the default Claude Code system prompt
 
 ## Environment Variables
