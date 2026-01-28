@@ -40,6 +40,7 @@ class ToolCall(BaseModel):
 # Multimodal content types (OpenAI format)
 class ImageUrl(BaseModel):
     url: str  # data:image/xxx;base64,... or https://...
+    detail: Literal["auto", "low", "high"] | None = None  # For future SDK support
 
 
 class ImageUrlContent(BaseModel):
@@ -128,3 +129,15 @@ class ModelInfo(BaseModel):
 class ModelList(BaseModel):
     object: str = "list"
     data: list[ModelInfo]
+
+
+# Error response models (OpenAI format)
+class ErrorDetail(BaseModel):
+    message: str
+    type: str  # "invalid_request_error", "server_error", etc.
+    param: str | None = None
+    code: str | None = None
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorDetail

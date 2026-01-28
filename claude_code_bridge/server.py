@@ -8,7 +8,8 @@ import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 # Configure logging
 logging.basicConfig(
@@ -16,7 +17,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
 )
-from fastapi.responses import StreamingResponse
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
 from .models import (
@@ -32,6 +32,9 @@ from .models import (
     Tool,
     ToolCall,
     FunctionCall,
+    Usage,
+    ErrorDetail,
+    ErrorResponse,
 )
 from .model_mapping import resolve_model, AVAILABLE_MODELS, UnsupportedModelError
 from .pool import ClientPool
@@ -57,6 +60,64 @@ app = FastAPI(title="Claude Code Bridge", version="0.1.0", lifespan=lifespan)
 
 # Timeout for Claude SDK calls (in seconds)
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
+
+
+# Exception handlers for OpenAI-format error responses
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Convert HTTPException to OpenAI error format."""
+    # Map status codes to error types
+    error_types = {
+        400: "invalid_request_error",
+        401: "authentication_error",
+        403: "permission_error",
+        404: "not_found_error",
+        429: "rate_limit_error",
+        500: "server_error",
+        504: "timeout_error",
+    }
+    error_type = error_types.get(exc.status_code, "server_error")
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(
+            error=ErrorDetail(
+                message=str(exc.detail),
+                type=error_type,
+            )
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(UnsupportedModelError)
+async def unsupported_model_handler(request: Request, exc: UnsupportedModelError):
+    """Handle unsupported model errors with OpenAI error format."""
+    return JSONResponse(
+        status_code=400,
+        content=ErrorResponse(
+            error=ErrorDetail(
+                message=str(exc),
+                type="invalid_request_error",
+                param="model",
+                code="model_not_found",
+            )
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle unexpected exceptions with OpenAI error format."""
+    logging.error(f"Unexpected error: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            error=ErrorDetail(
+                message="An internal server error occurred",
+                type="server_error",
+            )
+        ).model_dump(),
+    )
 
 
 def format_messages(messages: list[Message]) -> str | list[dict]:
@@ -260,6 +321,7 @@ class ClaudeResponse:
     def __init__(self):
         self.text: str = ""
         self.tool_calls: list[ToolCall] = []
+        self.usage: dict[str, int] | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -268,6 +330,17 @@ class ClaudeResponse:
     @property
     def finish_reason(self) -> str:
         return "tool_calls" if self.has_tool_calls else "stop"
+
+    def get_usage(self) -> dict[str, int]:
+        """Return usage dict with OpenAI-format keys."""
+        if self.usage:
+            # Map SDK usage keys to OpenAI format
+            return {
+                "prompt_tokens": self.usage.get("input_tokens", 0),
+                "completion_tokens": self.usage.get("output_tokens", 0),
+                "total_tokens": self.usage.get("input_tokens", 0) + self.usage.get("output_tokens", 0),
+            }
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
 async def call_claude_sdk(
@@ -328,6 +401,9 @@ async def call_claude_sdk(
                             response.text += block.text
                             logger.log_chunk(block.text)
                 elif isinstance(msg, ResultMessage):
+                    # Capture usage data from result
+                    if msg.usage:
+                        response.usage = msg.usage
                     break
         return response
 
@@ -495,11 +571,8 @@ async def chat_completions(request: ChatCompletionRequest):
     When the model decides to use tools, the response will include `tool_calls`
     with `finish_reason="tool_calls"`.
     """
-    # Validate model early to fail fast
-    try:
-        resolve_model(request.model)
-    except UnsupportedModelError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    # Validate model early to fail fast (UnsupportedModelError handled by exception handler)
+    resolve_model(request.model)
 
     request_id = f"chatcmpl-{uuid4().hex[:12]}"
     prompt = format_messages(request.messages)
@@ -533,6 +606,9 @@ async def chat_completions(request: ChatCompletionRequest):
     else:
         response_message = Message(role="assistant", content=response.text)
 
+    # Build usage from response
+    usage_data = response.get_usage()
+
     return ChatCompletionResponse(
         id=request_id,
         created=int(time.time()),
@@ -543,6 +619,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 finish_reason=response.finish_reason,
             )
         ],
+        usage=Usage(**usage_data),
     )
 
 
