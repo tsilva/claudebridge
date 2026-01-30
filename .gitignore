@@ -10,3 +10,49 @@ dist/
 build/
 .eggs/
 logs/
+
+# Sensitive data - credentials and secrets
+.env.*
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+service-account*.json
+*-credentials.json
+.aws/
+.ssh/
+*.gpg
+
+# API keys and tokens often in these
+config.local.*
+*.secret
+.secrets/
+
+# Logs (may contain sensitive data)
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build artifacts and caches
+env/
+node_modules/
+.npm/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude-sandbox.json
+*.code-workspace
