@@ -21,7 +21,7 @@ class TestResolveBridgeUrl:
         with patch.dict(os.environ, {}, clear=True):
             with patch(SOCKET_PATCH, side_effect=socket.gaierror):
                 result = resolve_bridge_url()
-                assert result == "http://localhost:8000"
+                assert result == "http://localhost:8082"
 
     def test_custom_default(self):
         """Custom default is respected."""
@@ -55,7 +55,7 @@ class TestResolveBridgeUrl:
         with patch.dict(os.environ, {}, clear=True):
             with patch(SOCKET_PATCH, return_value="192.168.65.2"):
                 result = resolve_bridge_url()
-                assert result == "http://host.docker.internal:8000"
+                assert result == "http://host.docker.internal:8082"
 
     def test_127_inside_container(self):
         """127.0.0.1 is swapped to host.docker.internal inside container."""

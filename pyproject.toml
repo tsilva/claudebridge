@@ -2,7 +2,7 @@
 name = "claude-code-bridge"
 version = "0.1.0"
 description = "Bridge OpenAI tools to Claude Code SDK"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",

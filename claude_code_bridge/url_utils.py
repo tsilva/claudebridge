@@ -5,7 +5,7 @@ import socket
 from urllib.parse import urlparse, urlunparse
 
 
-def resolve_bridge_url(default: str = "http://localhost:8000") -> str:
+def resolve_bridge_url(default: str = "http://localhost:8082") -> str:
     """
     Get bridge URL with automatic container detection.
 

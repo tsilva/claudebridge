@@ -40,7 +40,7 @@ class BridgeClient:
         Initialize BridgeClient.
 
         Args:
-            base_url: API base URL (default: $BRIDGE_URL or http://localhost:8000)
+            base_url: API base URL (default: $BRIDGE_URL or http://localhost:8082)
             api_key: API key (default: $OPENROUTER_API_KEY or "not-needed")
             timeout: Request timeout in seconds (default: 300)
             model: Default model to use (default: $OPENROUTER_MODEL or "sonnet")
@@ -367,7 +367,7 @@ def _cli_main() -> None:
     parser.add_argument(
         "--url", "-u",
         default=DEFAULT_BASE_URL,
-        help="API base URL (default: $BRIDGE_URL or http://localhost:8000)",
+        help="API base URL (default: $BRIDGE_URL or http://localhost:8082)",
     )
     parser.add_argument(
         "--api-key", "-k",

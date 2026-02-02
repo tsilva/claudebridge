@@ -30,7 +30,7 @@ class TestHealthCheck:
 
 
 class TestListModels:
-    """Tests for the /v1/models endpoint."""
+    """Tests for the /api/v1/models endpoint."""
 
     def test_list_models(self, client):
         """Verify list_models returns OpenRouter-style model slugs."""
@@ -43,7 +43,7 @@ class TestListModels:
 
 
 class TestChatCompletion:
-    """Tests for the /v1/chat/completions endpoint."""
+    """Tests for the /api/v1/chat/completions endpoint."""
 
     def test_sync_non_streaming(self, client):
         """Test synchronous non-streaming completion."""

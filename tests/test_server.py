@@ -410,11 +410,11 @@ class TestHealthEndpoint:
 
 @pytest.mark.unit
 class TestModelsEndpoint:
-    """Tests for /v1/models endpoint."""
+    """Tests for /api/v1/models endpoint."""
 
     def test_models_returns_list(self, test_client):
         """Models endpoint returns list."""
-        response = test_client.get("/v1/models")
+        response = test_client.get("/api/v1/models")
         assert response.status_code == 200
         data = response.json()
         assert data["object"] == "list"
@@ -422,7 +422,7 @@ class TestModelsEndpoint:
 
     def test_models_have_openrouter_format(self, test_client):
         """Models have OpenRouter-style slugs."""
-        response = test_client.get("/v1/models")
+        response = test_client.get("/api/v1/models")
         data = response.json()
         for model in data["data"]:
             assert model["id"].startswith("anthropic/claude-")
@@ -431,12 +431,12 @@ class TestModelsEndpoint:
 
 @pytest.mark.unit
 class TestChatCompletionsValidation:
-    """Tests for /v1/chat/completions request validation."""
+    """Tests for /api/v1/chat/completions request validation."""
 
     def test_missing_model_error(self, test_client):
         """Missing model returns error."""
         response = test_client.post(
-            "/v1/chat/completions",
+            "/api/v1/chat/completions",
             json={"messages": [{"role": "user", "content": "Hi"}]},
         )
         assert response.status_code == 422  # Pydantic validation error
@@ -444,7 +444,7 @@ class TestChatCompletionsValidation:
     def test_missing_messages_error(self, test_client):
         """Missing messages returns error."""
         response = test_client.post(
-            "/v1/chat/completions",
+            "/api/v1/chat/completions",
             json={"model": "sonnet"},
         )
         assert response.status_code == 422
@@ -452,7 +452,7 @@ class TestChatCompletionsValidation:
     def test_invalid_model_error(self, test_client):
         """Invalid model returns OpenAI-format error."""
         response = test_client.post(
-            "/v1/chat/completions",
+            "/api/v1/chat/completions",
             json={
                 "model": "invalid-model-xyz",
                 "messages": [{"role": "user", "content": "Hi"}],
@@ -468,7 +468,7 @@ class TestChatCompletionsValidation:
         """Empty messages list is accepted by Pydantic but may fail later."""
         # Note: This tests Pydantic validation, not business logic
         response = test_client.post(
-            "/v1/chat/completions",
+            "/api/v1/chat/completions",
             json={"model": "sonnet", "messages": []},
         )
         # Empty messages might be accepted by validation
@@ -482,7 +482,7 @@ class TestErrorResponseFormat:
     def test_invalid_model_error_format(self, test_client):
         """Invalid model error has correct format."""
         response = test_client.post(
-            "/v1/chat/completions",
+            "/api/v1/chat/completions",
             json={
                 "model": "not-a-real-model",
                 "messages": [{"role": "user", "content": "Hi"}],

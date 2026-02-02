@@ -28,7 +28,7 @@ OPENROUTER_TO_CLAUDE: dict[str, str] = {
 # Simple names that map directly
 SIMPLE_NAMES: set[str] = {"opus", "sonnet", "haiku"}
 
-# Available models for /v1/models endpoint (OpenRouter-style)
+# Available models for /api/v1/models endpoint (OpenRouter-style)
 AVAILABLE_MODELS: list[dict[str, str]] = [
     {"slug": "anthropic/claude-opus-4.5", "name": "Claude Opus 4.5"},
     {"slug": "anthropic/claude-sonnet-4.5", "name": "Claude Sonnet 4.5"},

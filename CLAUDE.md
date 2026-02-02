@@ -11,8 +11,8 @@ claude-code-bridge
 
 ## Endpoints
 
-- `POST /v1/chat/completions` - Chat completions (streaming supported)
-- `GET /v1/models` - List available models
+- `POST /api/v1/chat/completions` - Chat completions (streaming supported)
+- `GET /api/v1/models` - List available models
 - `GET /health` - Health check
 
 ## Model Selection
@@ -60,23 +60,23 @@ claude_code_bridge/
 
 - `POOL_SIZE` - Number of pooled clients (default: 3)
 - `CLAUDE_TIMEOUT` - Request timeout in seconds (default: 120)
-- `PORT` - Server port (default: 8000)
+- `PORT` - Server port (default: 8082)
 
 ## Testing
 
 ```bash
 # Using OpenRouter-style slug
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "anthropic/claude-sonnet-4", "messages": [{"role": "user", "content": "Hello!"}]}'
 
 # Using simple name
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}]}'
 
 # Streaming
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "anthropic/claude-sonnet-4", "messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
 ```
@@ -86,7 +86,7 @@ curl http://localhost:8000/v1/chat/completions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+client = OpenAI(base_url="http://localhost:8082/api/v1", api_key="not-needed")
 response = client.chat.completions.create(
     model="anthropic/claude-sonnet-4",  # or "sonnet"
     messages=[{"role": "user", "content": "Hello!"}]

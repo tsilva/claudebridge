@@ -14,7 +14,7 @@
 ## Features
 
 - **Lightweight** — ~200 lines of Python, minimal dependencies
-- **OpenAI-compatible** — Drop-in replacement for `/v1/chat/completions`
+- **OpenAI-compatible** — Drop-in replacement for `/api/v1/chat/completions`
 - **Uses your subscription** — No API keys needed, uses Claude Code OAuth
 - **Streaming support** — Real-time SSE responses matching OpenAI format
 - **Connection pooling** — Pre-spawned clients for reduced latency
@@ -46,7 +46,7 @@ When reinstalling from source, use `--no-cache` to ensure you get the latest cod
 uv tool install . --force --no-cache
 ```
 
-Server starts at `http://localhost:8000`
+Server starts at `http://localhost:8082`
 
 ## Usage
 
@@ -54,12 +54,12 @@ Server starts at `http://localhost:8000`
 
 ```bash
 # Non-streaming
-curl -X POST http://localhost:8000/v1/chat/completions \
+curl -X POST http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}]}'
 
 # Streaming
-curl -X POST http://localhost:8000/v1/chat/completions \
+curl -X POST http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
 ```
@@ -70,7 +70,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8000/v1",
+    base_url="http://localhost:8082/api/v1",
     api_key="not-needed"
 )
 
@@ -167,8 +167,8 @@ Also accepts: `claude-opus`, `claude-sonnet`, `claude-haiku`, `claude-3-sonnet`,
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/v1/chat/completions` | POST | Chat completions (OpenAI format) |
-| `/v1/models` | GET | List available models |
+| `/api/v1/chat/completions` | POST | Chat completions (OpenAI format) |
+| `/api/v1/models` | GET | List available models |
 | `/health` | GET | Health check |
 
 ## Configuration
@@ -183,7 +183,7 @@ claude login
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8000` | Server port |
+| `PORT` | `8082` | Server port |
 | `POOL_SIZE` | `3` | Number of pooled clients |
 | `CLAUDE_TIMEOUT` | `120` | Request timeout in seconds |
 
@@ -191,7 +191,7 @@ claude login
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BRIDGE_URL` | `http://localhost:8000` | API base URL |
+| `BRIDGE_URL` | `http://localhost:8082` | API base URL |
 | `OPENROUTER_API_KEY` | - | API key (if needed) |
 | `OPENROUTER_MODEL` | `default` | Default model |
 

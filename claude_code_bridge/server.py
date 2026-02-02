@@ -559,7 +559,7 @@ async def stream_claude_sdk(
     yield "data: [DONE]\n\n"
 
 
-@app.post("/v1/chat/completions")
+@app.post("/api/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
     """OpenAI-compatible chat completions endpoint.
 
@@ -623,7 +623,7 @@ async def chat_completions(request: ChatCompletionRequest):
     )
 
 
-@app.get("/v1/models")
+@app.get("/api/v1/models")
 async def list_models():
     """List available models with OpenRouter-style slugs."""
     return ModelList(
@@ -654,7 +654,7 @@ def main():
     parser = argparse.ArgumentParser(description="Claude Code Bridge - OpenAI-compatible API for Claude")
     parser.add_argument("-v", "--version", action="version", version=f"claude-code-bridge {get_version()}")
     parser.add_argument("-p", "--pool-size", type=int, default=1, help="Number of pooled clients (default: 1)")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)), help="Server port (default: 8000)")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8082)), help="Server port (default: 8082)")
     args = parser.parse_args()
 
     # Set pool size for lifespan initialization
