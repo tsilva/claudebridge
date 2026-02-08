@@ -49,7 +49,7 @@ claudebridge/
 ## Key Implementation Details
 
 - **Client Pool**: Single dynamic pool that tracks model per client. Initializes with opus clients by default. Replaces clients on-demand when a different model is requested. Prefers reusing clients with matching models. Uses `/clear` command between requests to reset conversation state.
-- **Concurrency**: Pool size controls concurrent requests (default: 3, configurable via `POOL_SIZE` env var)
+- **Concurrency**: Worker count controls concurrent requests (default: 3, configurable via `--workers`/`-w` flag or `POOL_SIZE` env var)
 - **Streaming**: SSE format matching OpenAI's streaming response
 - **Model selection**: Resolves OpenRouter slugs to Claude Code models. Model parameter is required.
 - **Pure chat mode**: Tools are disabled (`tools=[]`) - Claude operates as a conversational assistant without file access, bash commands, or web access

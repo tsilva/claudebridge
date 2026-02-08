@@ -3,17 +3,31 @@
 
   # claudebridge
 
-  [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
-  [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
-  [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+  [![CI](https://github.com/tsilva/claudebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/tsilva/claudebridge/actions/workflows/ci.yml)
+  [![PyPI](https://img.shields.io/pypi/v/claudebridge.svg)](https://pypi.org/project/claudebridge/)
+  [![Python 3.12+](https://img.shields.io/pypi/pyversions/claudebridge.svg)](https://pypi.org/project/claudebridge/)
+  [![License: MIT](https://img.shields.io/github/license/tsilva/claudebridge.svg)](LICENSE)
+  [![GitHub stars](https://img.shields.io/github/stars/tsilva/claudebridge?style=social)](https://github.com/tsilva/claudebridge)
 
   **🌉 Bridge OpenAI tools to Claude Code SDK — use your subscription anywhere 🔌**
 
 </div>
 
+## Why claudebridge?
+
+You have a Claude subscription. You have tools that speak OpenAI's API.
+claudebridge connects them — no API keys, no extra costs.
+
+| | claudebridge | LiteLLM | Direct API |
+|---|:---:|:---:|:---:|
+| Uses your Claude subscription | Yes | No | No |
+| No API key needed | Yes | No | No |
+| One command to start | Yes | ~Yes | No |
+| OpenAI-compatible | Yes | Yes | No |
+
 ## Features
 
-- **Lightweight** — ~200 lines of Python, minimal dependencies
+- **Lightweight** — Minimal dependencies, easy to understand
 - **OpenAI-compatible** — Drop-in replacement for `/api/v1/chat/completions`
 - **Uses your subscription** — No API keys needed, uses Claude Code OAuth
 - **Streaming support** — Real-time SSE responses matching OpenAI format
@@ -153,6 +167,16 @@ uv pip install -e ".[test]"
 uv run pytest tests/test_client.py -v
 ```
 
+<details>
+<summary><strong>Compatible Tools</strong></summary>
+
+- **Cursor** — Use Claude through Cursor's OpenAI-compatible backend
+- **Continue.dev** — VS Code extension with OpenAI endpoint support
+- **Open WebUI** — Self-hosted ChatGPT-like interface
+- **LangChain / LlamaIndex** — Via OpenAI provider
+- **Any OpenAI SDK client** — Python, TypeScript, Go, etc.
+</details>
+
 ## Available Models
 
 | Model ID | Description |
@@ -184,7 +208,7 @@ claude login
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8082` | Server port |
-| `POOL_SIZE` | `3` | Number of pooled clients |
+| `POOL_SIZE` | `3` | Number of workers (also settable via `--workers`/`-w` flag) |
 | `CLAUDE_TIMEOUT` | `120` | Request timeout in seconds |
 
 ### Client Environment Variables

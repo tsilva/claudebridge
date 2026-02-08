@@ -40,6 +40,7 @@ from .model_mapping import resolve_model, AVAILABLE_MODELS, UnsupportedModelErro
 from .pool import ClientPool
 from .session_logger import SessionLogger
 from .image_utils import has_multimodal_content, openai_content_to_claude
+from . import __version__
 
 # Pool configuration
 pool: ClientPool | None = None
@@ -56,7 +57,7 @@ async def lifespan(app: FastAPI):
     await pool.shutdown()
 
 
-app = FastAPI(title="Claude Code Bridge", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Claude Code Bridge", version=__version__, lifespan=lifespan)
 
 # Timeout for Claude SDK calls (in seconds)
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
@@ -643,7 +644,7 @@ def get_version() -> str:
         from ._build_info import GIT_HASH
     except ImportError:
         GIT_HASH = "dev"
-    return f"0.1.0 ({GIT_HASH})"
+    return f"{__version__} ({GIT_HASH})"
 
 
 def main():
@@ -653,12 +654,12 @@ def main():
 
     parser = argparse.ArgumentParser(description="Claude Code Bridge - OpenAI-compatible API for Claude")
     parser.add_argument("-v", "--version", action="version", version=f"claudebridge {get_version()}")
-    parser.add_argument("-p", "--pool-size", type=int, default=1, help="Number of pooled clients (default: 1)")
+    parser.add_argument("-w", "--workers", type=int, default=1, help="Number of pooled clients (default: 1)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8082)), help="Server port (default: 8082)")
     args = parser.parse_args()
 
-    # Set pool size for lifespan initialization
-    os.environ["POOL_SIZE"] = str(args.pool_size)
+    # Set worker count for lifespan initialization
+    os.environ["POOL_SIZE"] = str(args.workers)
 
     uvicorn.run(app, host="127.0.0.1", port=args.port)
 
