@@ -11,7 +11,7 @@
 
   **🌉 Bridge OpenAI tools to Claude Code SDK — use your subscription anywhere 🔌**
 
-  > ⚠️ **Legal Notice**: This tool bridges OpenAI-compatible clients to Claude using the Claude Code SDK. The permissibility of this usage under Anthropic's Terms of Service is unclear and subject to interpretation. Please review the [Legal Disclaimer](#legal-disclaimer) section before use.
+  > ⚠️ **Legal Notice**: This tool bridges OpenAI-compatible clients to Claude using the Claude Code SDK. The permissibility of this usage under Anthropic's Terms of Service is unclear. **Use at your own peril.** Please review the [Legal Disclaimer](#legal-disclaimer) section before use.
 
 </div>
 
@@ -240,7 +240,7 @@ claudebridge/
 
 ## Legal Disclaimer
 
-**⚠️ Use at Your Own Risk**
+**⚠️ Use at Your Own Peril**
 
 This tool (`claudebridge`) creates a bridge between OpenAI-compatible clients and Claude using the Claude Code SDK. The permissibility of this usage under [Anthropic's Terms of Service](https://www.anthropic.com/legal/commercial-terms) is **not clearly defined** and subject to interpretation.
 
@@ -267,23 +267,35 @@ We believe that for **lightweight personal local usage**, this should fall withi
 
 **However, this interpretation is disputable and may not align with Anthropic's view.**
 
+### Guidelines for Conservative Use
+
+Even if you conclude this usage is legitimate, **act conservatively**:
+
+- **For yourself only** — Do not share access, create multi-user services, or allow others to use your instance
+- **Stay local** — Run only on your personal machine, not on servers or cloud infrastructure
+- **Minimal usage** — Use sparingly and only for genuine personal development needs
+- **No automation** — Do not build automated pipelines, bots, or services on top of this tool
+- **No redistribution** — Do not package or distribute this as part of other products
+- **Stay within boundaries** — Respect rate limits and avoid any behavior that could be seen as abuse
+
 ### Your Responsibility
 
 By using this tool, you acknowledge that:
 
 1. You have read and understand [Anthropic's Terms of Service](https://www.anthropic.com/legal/commercial-terms)
 2. You accept that this usage may violate those terms
-3. You use this tool entirely at your own risk
-4. You are responsible for any consequences of use
+3. You use this tool entirely at your own peril
+4. You are solely responsible for any consequences of use
 5. We assume no liability for your use of this tool
 
 **We strongly encourage you to:**
 - Review Anthropic's terms yourself
 - Make your own determination about permissibility
+- Err on the side of caution
 - Contact Anthropic if you need clarification
-- Discontinue use if you have concerns
+- Discontinue use if you have any concerns
 
-This project is provided as-is for educational and development purposes.
+This project is provided as-is for educational purposes only.
 
 ## License
 
