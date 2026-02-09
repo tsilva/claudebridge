@@ -1,6 +1,6 @@
 [project]
 name = "py-claudebridge"
-version = "0.1.7"
+version = "0.1.8"
 description = "Bridge OpenAI tools to Claude Code SDK"
 readme = "README.md"
 license = {text = "MIT"}
