@@ -17,9 +17,27 @@ concurrency:
 
 jobs:
   test:
-    uses: tsilva/.github/.github/workflows/test.yml@main
-    with:
-      pytest-args: "-m unit"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run unit tests
+        run: uv run pytest tests/ -m unit -v --tb=short
 
   pii-scan:
     uses: tsilva/.github/.github/workflows/pii-scan.yml@main
