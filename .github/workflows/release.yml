@@ -18,6 +18,8 @@ concurrency:
 jobs:
   test:
     uses: tsilva/.github/.github/workflows/test.yml@main
+    with:
+      pytest-args: "-m unit"
 
   pii-scan:
     uses: tsilva/.github/.github/workflows/pii-scan.yml@main
