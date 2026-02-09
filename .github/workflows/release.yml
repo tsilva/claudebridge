@@ -47,6 +47,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      tag_exists: ${{ steps.check.outputs.tag_exists }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,3 +78,20 @@ jobs:
       - name: Publish to PyPI
         if: steps.check.outputs.tag_exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  update-homebrew:
+    needs: publish-pypi
+    if: needs.publish-pypi.outputs.tag_exists == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wait for PyPI propagation
+        run: sleep 60
+
+      - name: Trigger tap formula update
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh workflow run update-formula.yml \
+            --repo tsilva/homebrew-tap \
+            --field version=${{ needs.publish-pypi.outputs.version }}

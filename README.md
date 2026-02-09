@@ -42,6 +42,9 @@ claudebridge connects them — no API keys, no extra costs.
 # Install from PyPI
 uv tool install py-claudebridge
 
+# Or install via Homebrew (macOS)
+brew install tsilva/tap/claudebridge
+
 # Run the server
 claudebridge
 
