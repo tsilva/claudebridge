@@ -4,8 +4,8 @@
   # claudebridge
 
   [![CI](https://github.com/tsilva/claudebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/tsilva/claudebridge/actions/workflows/ci.yml)
-  [![PyPI](https://img.shields.io/pypi/v/claudebridge.svg)](https://pypi.org/project/claudebridge/)
-  [![Python 3.12+](https://img.shields.io/pypi/pyversions/claudebridge.svg)](https://pypi.org/project/claudebridge/)
+  [![PyPI](https://img.shields.io/pypi/v/py-claudebridge.svg)](https://pypi.org/project/py-claudebridge/)
+  [![Python 3.12+](https://img.shields.io/pypi/pyversions/py-claudebridge.svg)](https://pypi.org/project/py-claudebridge/)
   [![License: MIT](https://img.shields.io/github/license/tsilva/claudebridge.svg)](LICENSE)
   [![GitHub stars](https://img.shields.io/github/stars/tsilva/claudebridge?style=social)](https://github.com/tsilva/claudebridge)
 
@@ -39,13 +39,8 @@ claudebridge connects them — no API keys, no extra costs.
 ## Quick Start
 
 ```bash
-# Install globally
-uv tool install git+https://github.com/tsilva/claudebridge
-
-# Or install from source
-git clone https://github.com/tsilva/claudebridge
-cd claudebridge
-uv pip install -e .
+# Install from PyPI
+uv tool install py-claudebridge
 
 # Run the server
 claudebridge
@@ -53,6 +48,17 @@ claudebridge
 # Verify installed version
 claudebridge --version
 ```
+
+<details>
+<summary><strong>Alternative: Install from source</strong></summary>
+
+```bash
+git clone https://github.com/tsilva/claudebridge
+cd claudebridge
+uv pip install -e .
+```
+
+</details>
 
 ### Local Development
 
