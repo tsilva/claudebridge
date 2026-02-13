@@ -261,7 +261,6 @@ def parse_tool_response(text: str, tools: list[Tool]) -> tuple[str, list[ToolCal
         Tuple of (remaining_text, tool_calls)
     """
     import re
-    from uuid import uuid4
 
     # Try to find JSON in the response
     # Look for JSON block or raw JSON
@@ -315,6 +314,28 @@ def parse_tool_response(text: str, tools: list[Tool]) -> tuple[str, list[ToolCal
 
     # No valid JSON found, return text as-is
     return text, []
+
+
+def apply_tool_prompt(prompt: str | list[dict], tools: list[Tool]) -> str | list[dict]:
+    """Append tool prompt suffix to a string or multimodal prompt."""
+    tool_suffix = build_tool_prompt(tools)
+    if isinstance(prompt, str):
+        return prompt + tool_suffix
+    # For multimodal, append to the last text block or add new one
+    result = prompt.copy()
+    if result and result[-1].get("type") == "text":
+        result[-1] = {"type": "text", "text": result[-1]["text"] + tool_suffix}
+    else:
+        result.append({"type": "text", "text": tool_suffix})
+    return result
+
+
+async def send_query(client, prompt: str | list[dict]) -> None:
+    """Send a query to a Claude client, handling multimodal vs string dispatch."""
+    if isinstance(prompt, list):
+        await client.query(make_multimodal_prompt(prompt))
+    else:
+        await client.query(prompt)
 
 
 class ClaudeResponse:
@@ -371,30 +392,12 @@ async def call_claude_sdk(
     resolved_model = resolve_model(model)
 
     # Add tool prompt if tools are provided
-    effective_prompt = prompt
-    if tools:
-        tool_suffix = build_tool_prompt(tools)
-        if isinstance(prompt, str):
-            effective_prompt = prompt + tool_suffix
-        else:
-            # For multimodal, append to the last text block or add new one
-            effective_prompt = prompt.copy()
-            if effective_prompt and effective_prompt[-1].get("type") == "text":
-                effective_prompt[-1] = {
-                    "type": "text",
-                    "text": effective_prompt[-1]["text"] + tool_suffix,
-                }
-            else:
-                effective_prompt.append({"type": "text", "text": tool_suffix})
+    effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
 
     async def _query():
         response = ClaudeResponse()
         async with pool.acquire(resolved_model) as client:
-            # For multimodal content, create an async generator
-            if isinstance(effective_prompt, list):
-                await client.query(make_multimodal_prompt(effective_prompt))
-            else:
-                await client.query(effective_prompt)
+            await send_query(client, effective_prompt)
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
@@ -459,20 +462,7 @@ async def stream_claude_sdk(
     finish_reason = "stop"
 
     # Add tool prompt if tools are provided
-    effective_prompt = prompt
-    if tools:
-        tool_suffix = build_tool_prompt(tools)
-        if isinstance(prompt, str):
-            effective_prompt = prompt + tool_suffix
-        else:
-            effective_prompt = prompt.copy()
-            if effective_prompt and effective_prompt[-1].get("type") == "text":
-                effective_prompt[-1] = {
-                    "type": "text",
-                    "text": effective_prompt[-1]["text"] + tool_suffix,
-                }
-            else:
-                effective_prompt.append({"type": "text", "text": tool_suffix})
+    effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
 
     # Send initial chunk with role
     initial_chunk = ChatCompletionChunk(
@@ -488,11 +478,7 @@ async def stream_claude_sdk(
 
     try:
         async with pool.acquire(resolved_model) as client:
-            # For multimodal content, create an async generator
-            if isinstance(effective_prompt, list):
-                await client.query(make_multimodal_prompt(effective_prompt))
-            else:
-                await client.query(effective_prompt)
+            await send_query(client, effective_prompt)
             async for msg in client.receive_response():
                 # Check timeout
                 if time.monotonic() - start_time > CLAUDE_TIMEOUT:

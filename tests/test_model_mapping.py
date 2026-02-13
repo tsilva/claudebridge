@@ -158,20 +158,18 @@ class TestMappingConsistency:
         assert len(SIMPLE_NAMES) == 3
 
     def test_available_models_have_slugs(self):
-        """Available models list contains valid slugs."""
-        for model in AVAILABLE_MODELS:
-            assert "slug" in model
-            assert "name" in model
-            # Slug should be resolvable
-            assert resolve_model(model["slug"]) in SIMPLE_NAMES
+        """Available models list contains one entry per model family."""
+        assert len(AVAILABLE_MODELS) == len(SIMPLE_NAMES)
+        slugs = {m["slug"] for m in AVAILABLE_MODELS}
+        for name in SIMPLE_NAMES:
+            assert f"anthropic/claude-{name}" in slugs
 
     def test_available_models_format(self):
-        """Available models have expected format."""
+        """Available models have expected format and are resolvable."""
         for model in AVAILABLE_MODELS:
-            # Slug should follow OpenRouter format
             assert model["slug"].startswith("anthropic/claude-")
-            # Name should be human readable
             assert "Claude" in model["name"]
+            assert resolve_model(model["slug"]) in SIMPLE_NAMES
 
 
 @pytest.mark.unit

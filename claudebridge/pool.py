@@ -64,13 +64,10 @@ class ClientPool:
 
     async def _clear_client_state(self, client: ClaudeSDKClient) -> None:
         """Clear conversation state using /clear command."""
-        try:
-            await client.query("/clear")
-            async for msg in client.receive_response():
-                if isinstance(msg, ResultMessage):
-                    break
-        except Exception:
-            raise
+        await client.query("/clear")
+        async for msg in client.receive_response():
+            if isinstance(msg, ResultMessage):
+                break
 
     async def _create_client(self, model: str) -> ClaudeSDKClient:
         """Create and connect a new client with specified model."""
