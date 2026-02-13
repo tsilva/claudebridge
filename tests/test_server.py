@@ -24,12 +24,12 @@ from claudebridge.models import (
 from claudebridge.server import (
     format_messages,
     format_multimodal_messages,
-    extract_text_content,
     build_tool_prompt,
     parse_tool_response,
     ClaudeResponse,
     app,
 )
+from claudebridge.image_utils import extract_text_from_content
 
 
 @pytest.mark.unit
@@ -88,12 +88,12 @@ class TestFormatMessages:
 
 @pytest.mark.unit
 class TestExtractTextContent:
-    """Tests for extract_text_content function."""
+    """Tests for extract_text_from_content used by server formatting functions."""
 
     def test_single_text_part(self):
         """Single text part extracted."""
         content = [TextContent(type="text", text="Hello world")]
-        result = extract_text_content(content)
+        result = extract_text_from_content(content)
         assert result == "Hello world"
 
     def test_multiple_text_parts(self):
@@ -102,11 +102,11 @@ class TestExtractTextContent:
             TextContent(type="text", text="Hello"),
             TextContent(type="text", text="World"),
         ]
-        result = extract_text_content(content)
+        result = extract_text_from_content(content)
         assert result == "Hello World"
 
-    def test_mixed_content_text_only(self):
-        """Mixed content extracts only text."""
+    def test_mixed_content_text_and_image(self):
+        """Mixed content extracts text and image placeholders."""
         content = [
             TextContent(type="text", text="Look at this:"),
             ImageUrlContent(
@@ -114,13 +114,13 @@ class TestExtractTextContent:
                 image_url=ImageUrl(url="data:image/png;base64,abc"),
             ),
         ]
-        result = extract_text_content(content)
-        # Image content is not included in extract_text_content
+        result = extract_text_from_content(content)
         assert "Look at this:" in result
+        assert "[image: base64 data]" in result
 
     def test_empty_content_list(self):
         """Empty content list returns empty string."""
-        result = extract_text_content([])
+        result = extract_text_from_content([])
         assert result == ""
 
 

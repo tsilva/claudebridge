@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -39,7 +40,7 @@ from .models import (
 from .model_mapping import resolve_model, AVAILABLE_MODELS, UnsupportedModelError
 from .pool import ClientPool
 from .session_logger import SessionLogger
-from .image_utils import has_multimodal_content, openai_content_to_claude
+from .image_utils import has_multimodal_content, openai_content_to_claude, extract_text_from_content
 from . import __version__
 
 # Pool configuration
@@ -143,7 +144,7 @@ def format_messages(messages: list[Message]) -> str | list[dict]:
         elif isinstance(msg.content, str):
             content = msg.content
         else:
-            content = extract_text_content(msg.content)
+            content = extract_text_from_content(msg.content)
 
         if msg.role == "system":
             system_prompt = content
@@ -161,15 +162,6 @@ def format_messages(messages: list[Message]) -> str | list[dict]:
     return prompt
 
 
-def extract_text_content(content_parts: list) -> str:
-    """Extract text from content parts list."""
-    texts = []
-    for part in content_parts:
-        if hasattr(part, "type") and part.type == "text":
-            texts.append(part.text)
-    return " ".join(texts)
-
-
 def format_multimodal_messages(messages: list[Message]) -> list[dict]:
     """Format messages with image content for Claude SDK.
 
@@ -185,7 +177,7 @@ def format_multimodal_messages(messages: list[Message]) -> list[dict]:
             if isinstance(msg.content, str):
                 system_prompt = msg.content
             else:
-                system_prompt = extract_text_content(msg.content)
+                system_prompt = extract_text_from_content(msg.content)
         else:
             # Build content for user/assistant messages
             role_prefix = "User" if msg.role == "user" else "Assistant"
@@ -260,8 +252,6 @@ def parse_tool_response(text: str, tools: list[Tool]) -> tuple[str, list[ToolCal
     Returns:
         Tuple of (remaining_text, tool_calls)
     """
-    import re
-
     # Try to find JSON in the response
     # Look for JSON block or raw JSON
     json_patterns = [

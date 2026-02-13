@@ -99,13 +99,6 @@ def openai_content_to_claude(content: str | list[ContentPart]) -> list[dict[str,
             result.append({"type": "text", "text": part.text})
         elif isinstance(part, ImageUrlContent):
             result.append(openai_image_to_claude(part))
-        else:
-            # Handle dict-like objects (from Pydantic validation)
-            if hasattr(part, "type"):
-                if part.type == "text":
-                    result.append({"type": "text", "text": part.text})
-                elif part.type == "image_url":
-                    result.append(openai_image_to_claude(part))
 
     return result
 
@@ -115,7 +108,7 @@ def has_multimodal_content(messages: list) -> bool:
     for msg in messages:
         if isinstance(msg.content, list):
             for part in msg.content:
-                if isinstance(part, ImageUrlContent) or (hasattr(part, "type") and part.type == "image_url"):
+                if isinstance(part, ImageUrlContent):
                     return True
     return False
 
@@ -130,9 +123,9 @@ def extract_text_from_content(content: str | list[ContentPart]) -> str:
 
     parts = []
     for part in content:
-        if isinstance(part, TextContent) or (hasattr(part, "type") and part.type == "text"):
+        if isinstance(part, TextContent):
             parts.append(part.text)
-        elif isinstance(part, ImageUrlContent) or (hasattr(part, "type") and part.type == "image_url"):
+        elif isinstance(part, ImageUrlContent):
             url = part.image_url.url if hasattr(part, "image_url") else part.image_url["url"]
             if is_data_url(url):
                 media_type, _ = parse_data_url(url)
