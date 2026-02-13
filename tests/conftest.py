@@ -18,24 +18,13 @@ def _generate_pdf_fixture():
         return
 
     try:
-        from fpdf import FPDF
+        from .generate_pdf_fixture import generate_test_pdf
     except ImportError:
         # fpdf2 not installed, skip generation
         return
 
     FIXTURES_DIR.mkdir(exist_ok=True)
-
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 24)
-    pdf.cell(0, 20, "CLAUDE CODE BRIDGE", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 14)
-    pdf.cell(0, 10, "PDF Extraction Test Document", ln=True, align="C")
-    pdf.ln(10)
-    pdf.cell(0, 10, "This document tests PDF extraction accuracy.", ln=True)
-    pdf.cell(0, 10, "Version: 2025-01", ln=True)
-    pdf.cell(0, 10, "Status: ACTIVE", ln=True)
-    pdf.output(str(pdf_path))
+    generate_test_pdf(pdf_path)
 
 
 def pytest_configure(config):

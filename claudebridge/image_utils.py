@@ -51,25 +51,17 @@ def openai_image_to_claude(image_content: ImageUrlContent) -> dict[str, Any]:
 
     if is_data_url(url):
         media_type, data = parse_data_url(url)
-        # PDFs use document type, images use image type
-        if media_type == "application/pdf":
-            return {
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": data,
-                }
-            }
+        block_type = "document" if media_type == "application/pdf" else "image"
         return {
-            "type": "image",
+            "type": block_type,
             "source": {
                 "type": "base64",
                 "media_type": media_type,
                 "data": data,
             }
         }
-    elif is_http_url(url):
+
+    if is_http_url(url):
         return {
             "type": "image",
             "source": {
@@ -77,8 +69,8 @@ def openai_image_to_claude(image_content: ImageUrlContent) -> dict[str, Any]:
                 "url": url,
             }
         }
-    else:
-        raise ValueError(f"Unsupported image URL format: {url[:50]}...")
+
+    raise ValueError(f"Unsupported image URL format: {url[:50]}...")
 
 
 def openai_content_to_claude(content: str | list[ContentPart]) -> list[dict[str, Any]]:
@@ -105,12 +97,12 @@ def openai_content_to_claude(content: str | list[ContentPart]) -> list[dict[str,
 
 def has_multimodal_content(messages: list) -> bool:
     """Check if any message contains image content."""
-    for msg in messages:
-        if isinstance(msg.content, list):
-            for part in msg.content:
-                if isinstance(part, ImageUrlContent):
-                    return True
-    return False
+    return any(
+        isinstance(part, ImageUrlContent)
+        for msg in messages
+        if isinstance(msg.content, list)
+        for part in msg.content
+    )
 
 
 def extract_text_from_content(content: str | list[ContentPart]) -> str:
@@ -126,7 +118,7 @@ def extract_text_from_content(content: str | list[ContentPart]) -> str:
         if isinstance(part, TextContent):
             parts.append(part.text)
         elif isinstance(part, ImageUrlContent):
-            url = part.image_url.url if hasattr(part, "image_url") else part.image_url["url"]
+            url = part.image_url.url
             if is_data_url(url):
                 media_type, _ = parse_data_url(url)
                 if media_type == "application/pdf":

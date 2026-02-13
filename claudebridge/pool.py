@@ -82,17 +82,12 @@ class ClientPool:
             await client.disconnect()
         except Exception:
             pass
-        if client in self._client_models:
-            del self._client_models[client]
+        self._client_models.pop(client, None)
 
     def _log_status(self, action: str) -> None:
         """Log current pool status with model breakdown."""
-        model_counts: dict[str, int] = {}
-        for model in self._client_models.values():
-            model_counts[model] = model_counts.get(model, 0) + 1
-
         available_models = [self._client_models[c] for c in self._available]
-        available_str = f"[{', '.join(available_models)}]" if available_models else "[]"
+        available_str = f"[{', '.join(available_models)}]"
 
         logger.info(
             f"[pool] {action} | in_use={self._in_use} available={len(self._available)} "

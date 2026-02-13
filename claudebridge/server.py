@@ -9,6 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -18,7 +19,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
 )
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
 from .models import (
     ChatCompletionRequest,
@@ -138,13 +138,7 @@ def format_messages(messages: list[Message]) -> str | list[dict]:
     system_prompt = None
 
     for msg in messages:
-        # Handle None content (e.g., in tool call messages)
-        if msg.content is None:
-            content = ""
-        elif isinstance(msg.content, str):
-            content = msg.content
-        else:
-            content = extract_text_from_content(msg.content)
+        content = "" if msg.content is None else extract_text_from_content(msg.content)
 
         if msg.role == "system":
             system_prompt = content
@@ -173,11 +167,7 @@ def format_multimodal_messages(messages: list[Message]) -> list[dict]:
 
     for msg in messages:
         if msg.role == "system":
-            # Extract system prompt text
-            if isinstance(msg.content, str):
-                system_prompt = msg.content
-            else:
-                system_prompt = extract_text_from_content(msg.content)
+            system_prompt = extract_text_from_content(msg.content)
         else:
             # Build content for user/assistant messages
             role_prefix = "User" if msg.role == "user" else "Assistant"
@@ -220,30 +210,30 @@ def build_tool_prompt(tools: list[Tool]) -> str:
     by including the schema in the prompt and asking for JSON output.
     """
     if len(tools) == 1:
-        tool = tools[0]
-        schema = tool.function.parameters or {}
+        schema = tools[0].function.parameters or {}
         return (
             f"\n\n---\n"
             f"IMPORTANT: You must respond with a JSON object that matches this schema:\n"
             f"```json\n{json.dumps(schema, indent=2)}\n```\n"
             f"Respond ONLY with the JSON object, no other text before or after."
         )
-    else:
-        # Multiple tools - let model choose
-        tool_schemas = []
-        for tool in tools:
-            tool_schemas.append({
-                "name": tool.function.name,
-                "description": tool.function.description,
-                "parameters": tool.function.parameters,
-            })
-        return (
-            f"\n\n---\n"
-            f"IMPORTANT: You must call one of these functions by responding with JSON:\n"
-            f"```json\n{json.dumps(tool_schemas, indent=2)}\n```\n"
-            f"Respond with: {{\"function\": \"<function_name>\", \"arguments\": {{...}}}}\n"
-            f"Respond ONLY with the JSON object, no other text before or after."
-        )
+
+    # Multiple tools - let model choose
+    tool_schemas = [
+        {
+            "name": t.function.name,
+            "description": t.function.description,
+            "parameters": t.function.parameters,
+        }
+        for t in tools
+    ]
+    return (
+        f"\n\n---\n"
+        f"IMPORTANT: You must call one of these functions by responding with JSON:\n"
+        f"```json\n{json.dumps(tool_schemas, indent=2)}\n```\n"
+        f"Respond with: {{\"function\": \"<function_name>\", \"arguments\": {{...}}}}\n"
+        f"Respond ONLY with the JSON object, no other text before or after."
+    )
 
 
 def parse_tool_response(text: str, tools: list[Tool]) -> tuple[str, list[ToolCall]]:
@@ -267,38 +257,21 @@ def parse_tool_response(text: str, tools: list[Tool]) -> tuple[str, list[ToolCal
                 json_str = match.group(1).strip()
                 data = json.loads(json_str)
 
-                # Determine which tool was called
-                if len(tools) == 1:
-                    # Single tool - the JSON is the arguments
-                    tool_call = ToolCall(
-                        id=f"call_{uuid4().hex[:12]}",
-                        function=FunctionCall(
-                            name=tools[0].function.name,
-                            arguments=json.dumps(data),
-                        ),
-                    )
-                    return "", [tool_call]
+                # For multiple tools with explicit function/arguments format,
+                # extract the named function call
+                if len(tools) > 1 and "function" in data and "arguments" in data:
+                    name = data["function"]
+                    arguments = json.dumps(data["arguments"])
                 else:
-                    # Multiple tools - look for function name in response
-                    if "function" in data and "arguments" in data:
-                        tool_call = ToolCall(
-                            id=f"call_{uuid4().hex[:12]}",
-                            function=FunctionCall(
-                                name=data["function"],
-                                arguments=json.dumps(data["arguments"]),
-                            ),
-                        )
-                        return "", [tool_call]
-                    else:
-                        # Assume first tool
-                        tool_call = ToolCall(
-                            id=f"call_{uuid4().hex[:12]}",
-                            function=FunctionCall(
-                                name=tools[0].function.name,
-                                arguments=json.dumps(data),
-                            ),
-                        )
-                        return "", [tool_call]
+                    # Single tool, or multi-tool fallback to first tool
+                    name = tools[0].function.name
+                    arguments = json.dumps(data)
+
+                tool_call = ToolCall(
+                    id=f"call_{uuid4().hex[:12]}",
+                    function=FunctionCall(name=name, arguments=arguments),
+                )
+                return "", [tool_call]
             except json.JSONDecodeError:
                 continue
 
@@ -337,7 +310,7 @@ class ClaudeResponse:
 
     @property
     def has_tool_calls(self) -> bool:
-        return len(self.tool_calls) > 0
+        return bool(self.tool_calls)
 
     @property
     def finish_reason(self) -> str:
@@ -345,14 +318,15 @@ class ClaudeResponse:
 
     def get_usage(self) -> dict[str, int]:
         """Return usage dict with OpenAI-format keys."""
-        if self.usage:
-            # Map SDK usage keys to OpenAI format
-            return {
-                "prompt_tokens": self.usage.get("input_tokens", 0),
-                "completion_tokens": self.usage.get("output_tokens", 0),
-                "total_tokens": self.usage.get("input_tokens", 0) + self.usage.get("output_tokens", 0),
-            }
-        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        if not self.usage:
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        prompt = self.usage.get("input_tokens", 0)
+        completion = self.usage.get("output_tokens", 0)
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+        }
 
 
 async def call_claude_sdk(
@@ -519,7 +493,6 @@ async def stream_claude_sdk(
 
         logger.log_finish(finish_reason)
     except asyncio.TimeoutError:
-        logger.log_error(f"Timeout after {CLAUDE_TIMEOUT}s")
         raise
     except Exception as e:
         logger.log_error(str(e))
@@ -573,18 +546,11 @@ async def chat_completions(request: ChatCompletionRequest):
     response = await call_claude_sdk(prompt, request.model, logger, request.tools)
     logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
 
-    # Build response message based on whether we have tool calls
-    if response.has_tool_calls:
-        response_message = Message(
-            role="assistant",
-            content=response.text if response.text else None,
-            tool_calls=response.tool_calls,
-        )
-    else:
-        response_message = Message(role="assistant", content=response.text)
-
-    # Build usage from response
-    usage_data = response.get_usage()
+    response_message = Message(
+        role="assistant",
+        content=response.text or None,
+        tool_calls=response.tool_calls if response.has_tool_calls else None,
+    )
 
     return ChatCompletionResponse(
         id=request_id,
@@ -596,7 +562,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 finish_reason=response.finish_reason,
             )
         ],
-        usage=Usage(**usage_data),
+        usage=Usage(**response.get_usage()),
     )
 
 
