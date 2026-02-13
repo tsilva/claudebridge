@@ -71,11 +71,20 @@ class ChatCompletionRequest(BaseModel):
     # Tool calling support
     tools: list[Tool] | None = None
     tool_choice: ToolChoiceObject | str | None = None  # "auto", "none", or specific
-    # Additional fields ignored but accepted for compatibility
+    # Additional fields accepted for OpenRouter/OpenAI compatibility
     top_p: float | None = None
     frequency_penalty: float | None = None
     presence_penalty: float | None = None
     stop: str | list[str] | None = None
+    n: int | None = None
+    seed: int | None = None
+    user: str | None = None
+    response_format: dict | None = None
+    logit_bias: dict | None = None
+    logprobs: bool | None = None
+    top_logprobs: int | None = None
+    parallel_tool_calls: bool | None = None
+    stream_options: dict | None = None
 
 
 class Choice(BaseModel):
@@ -97,6 +106,7 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[Choice]
     usage: Usage = Field(default_factory=Usage)
+    system_fingerprint: str | None = None
 
 
 class DeltaMessage(BaseModel):
@@ -117,6 +127,8 @@ class ChatCompletionChunk(BaseModel):
     created: int
     model: str
     choices: list[StreamChoice]
+    usage: Usage | None = None
+    system_fingerprint: str | None = None
 
 
 class ModelInfo(BaseModel):

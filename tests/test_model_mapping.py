@@ -177,16 +177,16 @@ class TestEdgeCases:
     """Edge cases and boundary conditions."""
 
     def test_whitespace_handling(self):
-        """Leading/trailing whitespace: substring match still works."""
+        """Leading/trailing whitespace is stripped."""
         assert resolve_model(" opus ") == "opus"
 
-    def test_special_characters(self):
-        """Special characters: substring match still works."""
+    def test_special_characters_after_name(self):
+        """Non-alpha characters after name act as word boundary."""
         assert resolve_model("opus!") == "opus"
         assert resolve_model("sonnet@") == "sonnet"
 
     def test_unicode_characters(self):
-        """Unicode characters: substring match still works."""
+        """Unicode non-alpha characters act as word boundary."""
         assert resolve_model("opus™") == "opus"
 
     @pytest.mark.parametrize("model", list(SIMPLE_NAMES))
@@ -194,3 +194,40 @@ class TestEdgeCases:
         """Every simple name is resolvable."""
         result = resolve_model(model)
         assert result == model
+
+
+@pytest.mark.unit
+class TestWordBoundaryMatching:
+    """Tests for word-boundary aware model matching."""
+
+    def test_segmented_slug_matches(self):
+        """Model name as a segment in a slug resolves correctly."""
+        assert resolve_model("anthropic/claude-opus-4.5") == "opus"
+        assert resolve_model("anthropic/claude-sonnet-4") == "sonnet"
+        assert resolve_model("anthropic/claude-3.5-haiku-20241022") == "haiku"
+
+    def test_model_name_with_version_suffix(self):
+        """Model name followed by version numbers resolves."""
+        assert resolve_model("claude-opus-4") == "opus"
+        assert resolve_model("claude-sonnet-4.5") == "sonnet"
+        assert resolve_model("claude-haiku-3.5") == "haiku"
+
+    def test_model_name_with_underscores(self):
+        """Model name separated by underscores resolves."""
+        assert resolve_model("claude_opus_latest") == "opus"
+        assert resolve_model("test_sonnet_model") == "sonnet"
+
+    def test_model_name_with_dots(self):
+        """Model name separated by dots resolves."""
+        assert resolve_model("claude.opus.4") == "opus"
+
+    def test_embedded_in_longer_word_rejected(self):
+        """Model name embedded in a longer word does not match."""
+        # 'sonnet' embedded in 'sonnetary' — the 'ary' suffix is alpha, so no boundary
+        with pytest.raises(UnsupportedModelError):
+            resolve_model("sonnetary")
+
+    def test_prefix_alpha_rejected(self):
+        """Model name preceded by alpha characters does not match."""
+        with pytest.raises(UnsupportedModelError):
+            resolve_model("myopus")

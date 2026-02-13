@@ -46,14 +46,47 @@ from . import __version__
 # Pool configuration
 pool: ClientPool | None = None
 
+# Track which unsupported parameter warnings have been shown (log once per param)
+_warned_params: set[str] = set()
+
+# Parameters accepted for compatibility but not supported by Claude SDK
+_UNSUPPORTED_PARAMS = {
+    "temperature", "top_p", "frequency_penalty", "presence_penalty",
+    "stop", "n", "seed", "response_format", "logit_bias", "logprobs",
+    "top_logprobs", "parallel_tool_calls", "stream_options", "user",
+}
+
+
+def _warn_unsupported_params(request: "ChatCompletionRequest") -> None:
+    """Log a warning for each unsupported parameter that has a non-None value, once per param."""
+    for param in _UNSUPPORTED_PARAMS:
+        if param not in _warned_params:
+            value = getattr(request, param, None)
+            if value is not None:
+                _warned_params.add(param)
+                logging.warning(
+                    f"Parameter '{param}' is accepted but not supported by Claude SDK — value ignored"
+                )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan - initialize and shutdown pool."""
     global pool
     pool_size = int(os.environ.get("POOL_SIZE", 1))
+    timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
+    port = int(os.environ.get("PORT", 8082))
+
     pool = ClientPool(size=pool_size, default_model="opus")
-    await pool.initialize()
+    try:
+        await pool.initialize()
+    except Exception as e:
+        logging.error(f"Failed to initialize pool: {e}")
+        raise
+
+    logging.info(
+        f"claudebridge v{__version__} started | port={port} workers={pool_size} timeout={timeout}s"
+    )
     yield
     await pool.shutdown()
 
@@ -115,7 +148,7 @@ async def general_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content=ErrorResponse(
             error=ErrorDetail(
-                message="An internal server error occurred",
+                message=f"Internal error: {type(exc).__name__}: {str(exc)}",
                 type="server_error",
             )
         ).model_dump(),
@@ -389,7 +422,10 @@ async def call_claude_sdk(
         logger.log_finish(response.finish_reason)
     except asyncio.TimeoutError:
         logger.log_error(f"Timeout after {CLAUDE_TIMEOUT}s")
-        raise HTTPException(status_code=504, detail=f"Claude SDK timed out after {CLAUDE_TIMEOUT}s")
+        raise HTTPException(
+            status_code=504,
+            detail=f"Claude SDK timed out after {CLAUDE_TIMEOUT}s. Increase CLAUDE_TIMEOUT env var for longer requests."
+        )
     except Exception as e:
         logger.log_error(str(e))
         raise
@@ -439,6 +475,7 @@ async def stream_claude_sdk(
 
     # Buffer for tool response parsing
     full_text = ""
+    stream_usage: Usage | None = None
 
     try:
         async with pool.acquire(resolved_model) as client:
@@ -464,6 +501,15 @@ async def stream_claude_sdk(
                                 )
                                 yield f"data: {chunk.model_dump_json()}\n\n"
                 elif isinstance(msg, ResultMessage):
+                    # Capture usage data from result
+                    if msg.usage:
+                        prompt_tokens = msg.usage.get("input_tokens", 0)
+                        completion_tokens = msg.usage.get("output_tokens", 0)
+                        stream_usage = Usage(
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=prompt_tokens + completion_tokens,
+                        )
                     break
 
         # If tools were provided, parse the buffered response
@@ -493,17 +539,41 @@ async def stream_claude_sdk(
 
         logger.log_finish(finish_reason)
     except asyncio.TimeoutError:
-        raise
+        logger.log_error(f"Timeout after {CLAUDE_TIMEOUT}s")
+        error_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=model,
+            choices=[StreamChoice(
+                delta=DeltaMessage(content=f"\n\n[Error: Claude SDK timed out after {CLAUDE_TIMEOUT}s. Increase CLAUDE_TIMEOUT env var for longer requests.]"),
+                finish_reason="error",
+            )],
+        )
+        yield f"data: {error_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        return
     except Exception as e:
         logger.log_error(str(e))
-        raise
+        error_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=model,
+            choices=[StreamChoice(
+                delta=DeltaMessage(content=f"\n\n[Error: {type(e).__name__}: {str(e)}]"),
+                finish_reason="error",
+            )],
+        )
+        yield f"data: {error_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
-    # Send final chunk
+    # Send final chunk with usage data
     final_chunk = ChatCompletionChunk(
         id=request_id,
         created=created,
         model=model,
         choices=[StreamChoice(delta=DeltaMessage(), finish_reason=finish_reason)],
+        usage=stream_usage,
     )
     yield f"data: {final_chunk.model_dump_json()}\n\n"
     yield "data: [DONE]\n\n"
@@ -523,6 +593,9 @@ async def chat_completions(request: ChatCompletionRequest):
     """
     # Validate model early to fail fast (UnsupportedModelError handled by exception handler)
     resolve_model(request.model)
+
+    # Warn about unsupported params (once per param)
+    _warn_unsupported_params(request)
 
     request_id = f"chatcmpl-{uuid4().hex[:12]}"
     prompt = format_messages(request.messages)
@@ -576,8 +649,11 @@ async def list_models():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
-    return {"status": "ok"}
+    """Health check endpoint with pool status."""
+    result = {"status": "ok", "version": __version__}
+    if pool is not None:
+        result["pool"] = pool.status()
+    return result
 
 
 def get_version() -> str:

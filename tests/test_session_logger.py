@@ -6,7 +6,9 @@ Usage:
 """
 
 import os
+import time
 from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 
@@ -193,3 +195,58 @@ class TestSessionLoggerWrite:
         assert "[system]" in content
         assert "[user]" in content
         assert "[assistant]" in content
+
+
+@pytest.mark.unit
+class TestSessionLoggerCleanup:
+    """Tests for log file cleanup."""
+
+    @pytest.fixture(autouse=True)
+    def setup_log_dir(self, tmp_path):
+        """Set up temp log directory."""
+        self.log_dir = tmp_path
+        os.environ["LOG_DIR"] = str(tmp_path)
+        yield
+        del os.environ["LOG_DIR"]
+
+    def test_cleanup_deletes_oldest_files(self):
+        """Cleanup removes oldest files when over limit."""
+        # Create 5 existing log files with staggered mtimes
+        for i in range(5):
+            p = self.log_dir / f"old-{i}.log"
+            p.write_text(f"log {i}")
+            # Ensure distinct modification times
+            os.utime(p, (time.time() - 100 + i, time.time() - 100 + i))
+
+        # Set low limit
+        with patch("claudebridge.session_logger.MAX_LOG_FILES", 3):
+            logger = SessionLogger("test-cleanup", "sonnet")
+            logger.log_chunk("Response")
+            logger.log_finish("stop")
+            messages = [Message(role="user", content="Hi")]
+            logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        # Should have 3 files total (limit), keeping newest
+        remaining = list(self.log_dir.glob("*.log"))
+        assert len(remaining) == 3
+        # The two oldest should be gone
+        assert not (self.log_dir / "old-0.log").exists()
+        assert not (self.log_dir / "old-1.log").exists()
+        assert not (self.log_dir / "old-2.log").exists()
+
+    def test_no_cleanup_when_under_limit(self):
+        """No cleanup when file count is under limit."""
+        # Create 2 existing files
+        for i in range(2):
+            (self.log_dir / f"existing-{i}.log").write_text(f"log {i}")
+
+        with patch("claudebridge.session_logger.MAX_LOG_FILES", 100):
+            logger = SessionLogger("test-no-cleanup", "sonnet")
+            logger.log_chunk("Response")
+            logger.log_finish("stop")
+            messages = [Message(role="user", content="Hi")]
+            logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        # All files should remain
+        remaining = list(self.log_dir.glob("*.log"))
+        assert len(remaining) == 3  # 2 existing + 1 new

@@ -1,10 +1,16 @@
 """Session logging for Claude requests."""
 
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .image_utils import extract_text_from_content
+
+logger = logging.getLogger(__name__)
+
+# Maximum number of log files to keep
+MAX_LOG_FILES = int(os.environ.get("MAX_LOG_FILES", 1000))
 
 
 class SessionLogger:
@@ -108,3 +114,20 @@ class SessionLogger:
 
         with open(self.log_path, "w") as f:
             f.write("\n".join(lines))
+
+        self._cleanup_old_logs()
+
+    def _cleanup_old_logs(self) -> None:
+        """Delete oldest log files if count exceeds MAX_LOG_FILES."""
+        try:
+            log_files = sorted(
+                self.log_dir.glob("*.log"),
+                key=lambda f: f.stat().st_mtime,
+            )
+            if len(log_files) > MAX_LOG_FILES:
+                to_delete = log_files[:len(log_files) - MAX_LOG_FILES]
+                for f in to_delete:
+                    f.unlink()
+                logger.info(f"[session_logger] Cleaned up {len(to_delete)} old log files")
+        except Exception as e:
+            logger.warning(f"[session_logger] Log cleanup failed: {e}")

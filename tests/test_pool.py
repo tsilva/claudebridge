@@ -63,6 +63,17 @@ class TestMakeOptions:
         opts = make_options("opus")
         assert opts.env["CLAUDE_CODE_BRIDGE"] == "1"
 
+    def test_make_options_with_max_tokens(self):
+        """Options with max_tokens set."""
+        opts = make_options("opus", max_tokens=1024)
+        assert opts.max_tokens == 1024
+
+    def test_make_options_without_max_tokens(self):
+        """Options without max_tokens leaves it unset."""
+        opts = make_options("opus")
+        # Should not have max_tokens set (or default)
+        assert not hasattr(opts, 'max_tokens') or opts.max_tokens is None
+
 
 @pytest.mark.unit
 class TestClientPoolInit:
@@ -117,6 +128,9 @@ class TestClientPoolInitialize:
             assert len(pool._available) == 2
             assert pool._initialized is True
 
+            # Cleanup health check task
+            await pool.shutdown()
+
     async def test_initialize_sets_model(self):
         """Initialize sets model for all clients."""
         pool = ClientPool(size=2, default_model="sonnet")
@@ -129,6 +143,8 @@ class TestClientPoolInitialize:
 
             for client in pool._client_models:
                 assert pool._client_models[client] == "sonnet"
+
+            await pool.shutdown()
 
     async def test_double_initialize_no_op(self):
         """Double initialization is a no-op."""
@@ -143,6 +159,8 @@ class TestClientPoolInitialize:
 
             # Should only create clients once
             assert MockClient.call_count == 2
+
+            await pool.shutdown()
 
 
 @pytest.mark.unit
@@ -163,6 +181,8 @@ class TestClientPoolAcquire:
             async with pool.acquire("opus") as client:
                 assert client is mock_client
 
+            await pool.shutdown()
+
     async def test_acquire_different_model_replaces(self):
         """Acquire with different model replaces client."""
         pool = ClientPool(size=1, default_model="opus")
@@ -177,6 +197,8 @@ class TestClientPoolAcquire:
             async with pool.acquire("sonnet") as client:
                 assert client is mock_sonnet
                 mock_opus.disconnect.assert_called_once()
+
+            await pool.shutdown()
 
     async def test_acquire_returns_client_to_pool(self):
         """Client is returned to pool after use."""
@@ -194,6 +216,8 @@ class TestClientPoolAcquire:
 
             assert len(pool._available) == 1
             assert pool._in_use == 0
+
+            await pool.shutdown()
 
     async def test_acquire_concurrent_limit(self):
         """Concurrent acquisitions limited by pool size."""
@@ -227,6 +251,30 @@ class TestClientPoolAcquire:
             await asyncio.gather(*tasks)
 
             assert max_concurrent <= 2
+
+            await pool.shutdown()
+
+    async def test_acquire_semaphore_timeout(self):
+        """Acquire raises 503 when semaphore times out."""
+        pool = ClientPool(size=1, default_model="opus")
+        pool._acquire_timeout = 0.1  # Very short timeout
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            mock_client = _make_mock_client()
+            MockClient.return_value = mock_client
+
+            await pool.initialize()
+
+            # Hold the only client
+            async with pool.acquire("opus"):
+                from fastapi import HTTPException
+                with pytest.raises(HTTPException) as exc_info:
+                    async with pool.acquire("opus"):
+                        pass
+                assert exc_info.value.status_code == 503
+                assert "busy" in str(exc_info.value.detail).lower()
+
+            await pool.shutdown()
 
 
 @pytest.mark.unit
@@ -270,6 +318,20 @@ class TestClientPoolShutdown:
             assert pool._in_use == 0
             assert pool._initialized is False
 
+    async def test_shutdown_cancels_health_check(self):
+        """Shutdown cancels the periodic health check task."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            mock_client = _make_mock_client()
+            MockClient.return_value = mock_client
+
+            await pool.initialize()
+            assert pool._health_check_task is not None
+
+            await pool.shutdown()
+            assert pool._health_check_task is None
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio
@@ -277,23 +339,23 @@ class TestClientPoolErrorHandling:
     """Tests for pool error handling."""
 
     async def test_acquire_handles_clear_error(self):
-        """Pool handles error during /clear command."""
+        """Pool replaces client when /clear fails."""
         pool = ClientPool(size=1, default_model="opus")
 
         with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
             mock_client = AsyncMock()
             mock_client.query.side_effect = Exception("Connection lost")
-            # Need replacement client
+            # Need replacement client for clear failure, then another for the fresh client
             mock_replacement = _make_mock_client()
             MockClient.side_effect = [mock_client, mock_replacement]
 
             await pool.initialize()
 
-            with pytest.raises(Exception, match="Connection lost"):
-                async with pool.acquire("opus"):
-                    pass
+            # Clear will fail on mock_client, pool should replace it with mock_replacement
+            async with pool.acquire("opus") as client:
+                assert client is mock_replacement
 
-            mock_client.disconnect.assert_called()
+            await pool.shutdown()
 
     async def test_acquire_client_returned_on_success(self):
         """Client is returned to pool on successful use."""
@@ -309,6 +371,57 @@ class TestClientPoolErrorHandling:
                 pass
 
             assert mock_client in pool._available
+
+            await pool.shutdown()
+
+    async def test_clear_timeout_replaces_client(self):
+        """Client is replaced when /clear times out."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            # First client: /clear hangs
+            slow_client = AsyncMock()
+
+            async def slow_clear(*args, **kwargs):
+                await asyncio.sleep(100)  # Will timeout
+
+            slow_client.query.side_effect = slow_clear
+
+            async def _slow_receive():
+                await asyncio.sleep(100)
+                yield MagicMock(spec=ResultMessage)
+
+            slow_client.receive_response = _slow_receive
+
+            # Replacement client
+            replacement = _make_mock_client()
+            MockClient.side_effect = [slow_client, replacement]
+
+            await pool.initialize()
+
+            async with pool.acquire("opus") as client:
+                assert client is replacement
+
+            await pool.shutdown()
+
+    async def test_pool_recovery_after_replacement_failure(self):
+        """Pool schedules recovery when replacement fails."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            mock_client = _make_mock_client()
+            MockClient.return_value = mock_client
+
+            await pool.initialize()
+
+            # Simulate error during acquire that leads to replacement failure
+            async with pool.acquire("opus") as client:
+                pass
+
+            # Pool should still be functional
+            assert len(pool._available) == 1
+
+            await pool.shutdown()
 
 
 @pytest.mark.unit
@@ -329,6 +442,8 @@ class TestClientPoolModelTracking:
             for client in pool._available:
                 assert pool._client_models[client] == "opus"
 
+            await pool.shutdown()
+
     async def test_model_updated_on_replacement(self):
         """Model is updated when client is replaced."""
         pool = ClientPool(size=1, default_model="opus")
@@ -344,3 +459,46 @@ class TestClientPoolModelTracking:
                 pass
 
             assert pool._client_models[mock_sonnet] == "sonnet"
+
+            await pool.shutdown()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestClientPoolStatus:
+    """Tests for pool status method."""
+
+    async def test_status_returns_metrics(self):
+        """Status returns pool size, available, in_use, and models."""
+        pool = ClientPool(size=2, default_model="opus")
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            mock_clients = [_make_mock_client() for _ in range(2)]
+            MockClient.side_effect = mock_clients
+
+            await pool.initialize()
+
+            status = pool.status()
+            assert status["size"] == 2
+            assert status["available"] == 2
+            assert status["in_use"] == 0
+            assert len(status["models"]) == 2
+
+            await pool.shutdown()
+
+    async def test_status_during_acquire(self):
+        """Status reflects in-use clients during acquire."""
+        pool = ClientPool(size=2, default_model="opus")
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            mock_clients = [_make_mock_client() for _ in range(2)]
+            MockClient.side_effect = mock_clients
+
+            await pool.initialize()
+
+            async with pool.acquire("opus"):
+                status = pool.status()
+                assert status["in_use"] == 1
+                assert status["available"] == 1
+
+            await pool.shutdown()

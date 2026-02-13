@@ -402,10 +402,12 @@ class TestHealthEndpoint:
     """Tests for /health endpoint."""
 
     def test_health_returns_ok(self, test_client):
-        """Health endpoint returns status ok."""
+        """Health endpoint returns status ok with version and pool info."""
         response = test_client.get("/health")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        data = response.json()
+        assert data["status"] == "ok"
+        assert "version" in data
 
 
 @pytest.mark.unit
@@ -473,6 +475,25 @@ class TestChatCompletionsValidation:
         )
         # Empty messages might be accepted by validation
         # The actual error would come from the SDK call
+
+    def test_extra_openrouter_params_accepted(self, test_client):
+        """Extra OpenRouter/OpenAI parameters don't cause request rejection."""
+        response = test_client.post(
+            "/api/v1/chat/completions",
+            json={
+                "model": "sonnet",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "temperature": 0.5,
+                "seed": 42,
+                "n": 1,
+                "user": "test-user",
+                "response_format": {"type": "json_object"},
+                "logprobs": True,
+                "top_logprobs": 5,
+            },
+        )
+        # Should not be 422 (validation error)
+        assert response.status_code != 422
 
 
 @pytest.mark.unit

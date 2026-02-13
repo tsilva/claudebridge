@@ -1,7 +1,17 @@
 """OpenRouter slug to Claude Code model mapping."""
 
+import re
+
 # Simple names that map directly to Claude Code model identifiers
 SIMPLE_NAMES: set[str] = {"opus", "sonnet", "haiku"}
+
+# Word-boundary pattern for matching model names in slugs
+# Matches model names surrounded by non-alphanumeric chars (or string boundaries)
+# e.g. "anthropic/claude-opus-4.5" matches "opus", but "opus-lite" would need "opus" as a segment
+_MODEL_PATTERN = re.compile(
+    r'(?:^|[^a-zA-Z])(' + '|'.join(sorted(SIMPLE_NAMES)) + r')(?:[^a-zA-Z]|$)',
+    re.IGNORECASE,
+)
 
 # Available models for /api/v1/models endpoint (OpenRouter-style)
 AVAILABLE_MODELS: list[dict[str, str]] = [
@@ -25,6 +35,9 @@ class UnsupportedModelError(ValueError):
 def resolve_model(model: str) -> str:
     """Resolve an OpenRouter-style slug or simple name to a Claude Code model.
 
+    Uses word-boundary matching to prevent false positives. Model names must appear
+    as distinct segments separated by non-alpha characters (/, -, _, ., etc.).
+
     Args:
         model: Model identifier (OpenRouter slug or simple name)
 
@@ -34,16 +47,17 @@ def resolve_model(model: str) -> str:
     Raises:
         UnsupportedModelError: If model is not recognized
     """
-    model_lower = model.lower()
+    model_stripped = model.strip()
+    model_lower = model_stripped.lower()
 
-    # Already a simple Claude Code name
+    # Already a simple Claude Code name (exact match)
     if model_lower in SIMPLE_NAMES:
         return model_lower
 
-    # Match by substring: any slug containing opus, sonnet, or haiku
-    for name in SIMPLE_NAMES:
-        if name in model_lower:
-            return name
+    # Word-boundary match: find model name as a distinct segment in the slug
+    match = _MODEL_PATTERN.search(model_lower)
+    if match:
+        return match.group(1).lower()
 
     # Unknown model - raise error
     raise UnsupportedModelError(model)

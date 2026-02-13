@@ -239,6 +239,30 @@ class TestChatCompletionRequest:
         )
         assert req.stop == ["END", "STOP"]
 
+    def test_request_with_openrouter_compat_fields(self):
+        """Request accepts all OpenRouter/OpenAI compatibility fields."""
+        req = ChatCompletionRequest(
+            model="sonnet",
+            messages=[Message(role="user", content="Hello")],
+            n=1,
+            seed=42,
+            user="test-user",
+            response_format={"type": "json_object"},
+            logit_bias={"123": -100},
+            logprobs=True,
+            top_logprobs=5,
+            parallel_tool_calls=True,
+            stream_options={"include_usage": True},
+        )
+        assert req.n == 1
+        assert req.seed == 42
+        assert req.user == "test-user"
+        assert req.response_format == {"type": "json_object"}
+        assert req.logprobs is True
+        assert req.top_logprobs == 5
+        assert req.parallel_tool_calls is True
+        assert req.stream_options == {"include_usage": True}
+
 
 @pytest.mark.unit
 class TestChatCompletionResponse:
@@ -318,6 +342,37 @@ class TestChatCompletionResponse:
         assert resp.usage.completion_tokens == 0
         assert resp.usage.total_tokens == 0
 
+    def test_system_fingerprint_field(self):
+        """Response accepts system_fingerprint."""
+        resp = ChatCompletionResponse(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="sonnet",
+            choices=[
+                Choice(
+                    message=Message(role="assistant", content="Hi"),
+                    finish_reason="stop",
+                )
+            ],
+            system_fingerprint="fp_abc123",
+        )
+        assert resp.system_fingerprint == "fp_abc123"
+
+    def test_system_fingerprint_default_none(self):
+        """system_fingerprint defaults to None."""
+        resp = ChatCompletionResponse(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="sonnet",
+            choices=[
+                Choice(
+                    message=Message(role="assistant", content="Hi"),
+                    finish_reason="stop",
+                )
+            ],
+        )
+        assert resp.system_fingerprint is None
+
 
 @pytest.mark.unit
 class TestChatCompletionChunk:
@@ -353,6 +408,39 @@ class TestChatCompletionChunk:
             choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
         )
         assert chunk.choices[0].finish_reason == "stop"
+
+    def test_chunk_with_usage(self):
+        """Chunk with usage data (for final streaming chunk)."""
+        chunk = ChatCompletionChunk(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="sonnet",
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason="stop")],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        assert chunk.usage.prompt_tokens == 10
+        assert chunk.usage.total_tokens == 15
+
+    def test_chunk_usage_default_none(self):
+        """Chunk usage defaults to None."""
+        chunk = ChatCompletionChunk(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="sonnet",
+            choices=[StreamChoice(delta=DeltaMessage(content="Hi"))],
+        )
+        assert chunk.usage is None
+
+    def test_chunk_system_fingerprint(self):
+        """Chunk accepts system_fingerprint."""
+        chunk = ChatCompletionChunk(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="sonnet",
+            choices=[StreamChoice(delta=DeltaMessage(content="Hi"))],
+            system_fingerprint="fp_abc",
+        )
+        assert chunk.system_fingerprint == "fp_abc"
 
 
 @pytest.mark.unit
