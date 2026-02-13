@@ -12,7 +12,6 @@ import pytest
 from claudebridge.model_mapping import (
     resolve_model,
     UnsupportedModelError,
-    OPENROUTER_TO_CLAUDE,
     SIMPLE_NAMES,
     AVAILABLE_MODELS,
 )
@@ -158,11 +157,6 @@ class TestMappingConsistency:
         assert "haiku" in SIMPLE_NAMES
         assert len(SIMPLE_NAMES) == 3
 
-    def test_openrouter_mapping_values_valid(self):
-        """All OpenRouter mappings point to valid simple names."""
-        for slug, model in OPENROUTER_TO_CLAUDE.items():
-            assert model in SIMPLE_NAMES, f"Slug {slug} maps to invalid model {model}"
-
     def test_available_models_have_slugs(self):
         """Available models list contains valid slugs."""
         for model in AVAILABLE_MODELS:
@@ -185,28 +179,17 @@ class TestEdgeCases:
     """Edge cases and boundary conditions."""
 
     def test_whitespace_handling(self):
-        """Leading/trailing whitespace not automatically handled."""
-        # Note: Current implementation doesn't strip whitespace
-        with pytest.raises(UnsupportedModelError):
-            resolve_model(" opus ")
+        """Leading/trailing whitespace: substring match still works."""
+        assert resolve_model(" opus ") == "opus"
 
     def test_special_characters(self):
-        """Special characters raise error."""
-        with pytest.raises(UnsupportedModelError):
-            resolve_model("opus!")
-        with pytest.raises(UnsupportedModelError):
-            resolve_model("sonnet@")
+        """Special characters: substring match still works."""
+        assert resolve_model("opus!") == "opus"
+        assert resolve_model("sonnet@") == "sonnet"
 
     def test_unicode_characters(self):
-        """Unicode characters raise error."""
-        with pytest.raises(UnsupportedModelError):
-            resolve_model("opus™")
-
-    @pytest.mark.parametrize("model", list(OPENROUTER_TO_CLAUDE.keys()))
-    def test_all_slugs_resolvable(self, model):
-        """Every slug in the mapping is resolvable."""
-        result = resolve_model(model)
-        assert result in SIMPLE_NAMES
+        """Unicode characters: substring match still works."""
+        assert resolve_model("opus™") == "opus"
 
     @pytest.mark.parametrize("model", list(SIMPLE_NAMES))
     def test_all_simple_names_resolvable(self, model):
