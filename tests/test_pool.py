@@ -493,3 +493,60 @@ class TestClientPoolStatus:
                 assert status["available"] == 1
 
             await pool.shutdown()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestClientPoolSnapshot:
+    """Tests for pool snapshot method."""
+
+    async def test_snapshot_returns_state(self):
+        """Snapshot returns size, in_use, available, available_models, all_models."""
+        pool = ClientPool(size=2, default_model="opus")
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            mock_clients = [_make_mock_client() for _ in range(3)]
+            MockClient.side_effect = mock_clients
+
+            await pool.initialize()
+
+            async with pool.acquire("opus"):
+                snap = pool.snapshot()
+                assert snap["size"] == 2
+                assert snap["in_use"] == 1
+                assert snap["available"] == 1
+                assert isinstance(snap["available_models"], list)
+                assert isinstance(snap["all_models"], list)
+                assert len(snap["all_models"]) >= 1
+
+            await pool.shutdown()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestClientPoolRequestIdLogging:
+    """Tests for request ID in pool logs."""
+
+    async def test_acquire_logs_request_id(self, caplog):
+        """Acquire logs include request ID when provided."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+            mock_client = _make_mock_client()
+            mock_prewarm = _make_mock_client()
+            MockClient.side_effect = [mock_client, mock_prewarm]
+
+            await pool.initialize()
+
+            with caplog.at_level("INFO", logger="claudebridge.pool"):
+                async with pool.acquire("opus", request_id="chatcmpl-test123"):
+                    pass
+
+            # Allow background tasks to complete
+            await asyncio.sleep(0.01)
+
+            # Check that request ID appears in log messages
+            request_id_logs = [r for r in caplog.records if "chatcmpl-test123" in r.message]
+            assert len(request_id_logs) >= 1
+
+            await pool.shutdown()

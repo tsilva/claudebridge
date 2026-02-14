@@ -250,3 +250,120 @@ class TestSessionLoggerCleanup:
         # All files should remain
         remaining = list(self.log_dir.glob("*.log"))
         assert len(remaining) == 3  # 2 existing + 1 new
+
+
+@pytest.mark.unit
+class TestSessionLoggerTimingBreakdown:
+    """Tests for timing breakdown in session logs."""
+
+    @pytest.fixture(autouse=True)
+    def setup_log_dir(self, tmp_path):
+        """Set up temp log directory."""
+        self.log_dir = tmp_path
+        os.environ["LOG_DIR"] = str(tmp_path)
+        yield
+        del os.environ["LOG_DIR"]
+
+    def test_write_with_timing_breakdown(self):
+        """Log file includes acquire and query timing when set."""
+        logger = SessionLogger("test-timing", "opus")
+        logger.log_chunk("Response")
+        logger.log_finish("stop")
+        logger.log_timing(acquire_ms=45, query_ms=3200)
+        messages = [Message(role="user", content="Hello")]
+        logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        content = logger.log_path.read_text()
+        assert "Acquire: 45ms" in content
+        assert "Query: 3200ms" in content
+
+    def test_write_without_timing_breakdown(self):
+        """Log file omits acquire/query lines when not set."""
+        logger = SessionLogger("test-no-timing", "opus")
+        logger.log_chunk("Response")
+        logger.log_finish("stop")
+        messages = [Message(role="user", content="Hello")]
+        logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        content = logger.log_path.read_text()
+        assert "Acquire:" not in content
+        assert "Query:" not in content
+
+
+@pytest.mark.unit
+class TestSessionLoggerPoolSnapshot:
+    """Tests for pool snapshot in session logs."""
+
+    @pytest.fixture(autouse=True)
+    def setup_log_dir(self, tmp_path):
+        """Set up temp log directory."""
+        self.log_dir = tmp_path
+        os.environ["LOG_DIR"] = str(tmp_path)
+        yield
+        del os.environ["LOG_DIR"]
+
+    def test_write_with_pool_snapshot(self):
+        """Log file includes POOL STATE section when snapshot is present."""
+        logger = SessionLogger("test-snap", "opus")
+        logger.log_error(
+            "Timeout after 120s",
+            pool_snapshot={"size": 3, "in_use": 1, "available": 2, "available_models": ["opus", "opus"], "all_models": ["opus", "opus", "opus"]},
+        )
+        messages = [Message(role="user", content="Hello")]
+        logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        content = logger.log_path.read_text()
+        assert "--- POOL STATE ---" in content
+        assert "size: 3" in content
+        assert "in_use: 1" in content
+
+    def test_write_without_pool_snapshot(self):
+        """Log file omits POOL STATE section when no snapshot."""
+        logger = SessionLogger("test-no-snap", "opus")
+        logger.log_error("Some error")
+        messages = [Message(role="user", content="Hello")]
+        logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        content = logger.log_path.read_text()
+        assert "POOL STATE" not in content
+
+
+@pytest.mark.unit
+class TestSessionLoggerErrorDetails:
+    """Tests for exception details in session logs."""
+
+    @pytest.fixture(autouse=True)
+    def setup_log_dir(self, tmp_path):
+        """Set up temp log directory."""
+        self.log_dir = tmp_path
+        os.environ["LOG_DIR"] = str(tmp_path)
+        yield
+        del os.environ["LOG_DIR"]
+
+    def test_log_error_with_exception_details(self):
+        """Log file includes exception type and traceback when provided."""
+        logger = SessionLogger("test-exc", "opus")
+        logger.log_error(
+            "connection refused",
+            exception_type="ConnectionError",
+            traceback_str="Traceback (most recent call last):\n  File \"server.py\", line 10\nConnectionError: refused",
+        )
+        messages = [Message(role="user", content="Hello")]
+        logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        content = logger.log_path.read_text()
+        assert "Exception: ConnectionError" in content
+        assert "Traceback:" in content
+        assert "ConnectionError: refused" in content
+
+    def test_log_error_without_exception_details(self):
+        """Log file omits exception details when not provided."""
+        logger = SessionLogger("test-no-exc", "opus")
+        logger.log_error("simple error")
+        messages = [Message(role="user", content="Hello")]
+        logger.write(messages, stream=False, temperature=None, max_tokens=None)
+
+        content = logger.log_path.read_text()
+        assert "simple error" in content
+        assert "Exception:" not in content
+        assert "Traceback:" not in content

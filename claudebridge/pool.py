@@ -95,13 +95,20 @@ class ClientPool:
         except Exception as e:
             logger.warning(f"[pool] Background disconnect failed: {e}")
 
-    def _log_status(self, action: str) -> None:
+    def _log_tag(self, request_id: str | None = None) -> str:
+        """Return log prefix with optional request ID."""
+        if request_id:
+            return f"[pool] [{request_id}]"
+        return "[pool]"
+
+    def _log_status(self, action: str, request_id: str | None = None) -> None:
         """Log current pool status with model breakdown."""
         available_models = [self._client_models[c] for c in self._available]
         available_str = f"[{', '.join(available_models)}]"
+        tag = self._log_tag(request_id)
 
         logger.info(
-            f"[pool] {action} | in_use={self._in_use} available={len(self._available)} "
+            f"{tag} {action} | in_use={self._in_use} available={len(self._available)} "
             f"models={available_str}"
         )
 
@@ -117,8 +124,20 @@ class ClientPool:
             "models": all_models,
         }
 
+    def snapshot(self) -> dict:
+        """Return pool state snapshot for error diagnostics."""
+        available_models = [self._client_models[c] for c in self._available]
+        all_models = list(self._client_models.values())
+        return {
+            "size": self.size,
+            "in_use": self._in_use,
+            "available": len(self._available),
+            "available_models": available_models,
+            "all_models": all_models,
+        }
+
     @asynccontextmanager
-    async def acquire(self, model: str) -> AsyncIterator[ClaudeSDKClient]:
+    async def acquire(self, model: str, request_id: str | None = None) -> AsyncIterator[ClaudeSDKClient]:
         """Get a fresh client for the specified model.
 
         Takes a pre-warmed client with matching model if available,
@@ -126,6 +145,7 @@ class ClientPool:
 
         Args:
             model: Model name (opus, sonnet, haiku).
+            request_id: Optional request ID for log correlation.
 
         Yields:
             A ClaudeSDKClient configured for the specified model.
@@ -133,11 +153,13 @@ class ClientPool:
         Raises:
             HTTPException: 503 if acquire times out waiting for a slot.
         """
+        tag = self._log_tag(request_id)
         try:
             await asyncio.wait_for(
                 self._semaphore.acquire(), timeout=self._acquire_timeout
             )
         except asyncio.TimeoutError:
+            logger.error(f"{tag} Semaphore timeout after {self._acquire_timeout}s | pool={self.snapshot()}")
             from fastapi import HTTPException
             raise HTTPException(
                 status_code=503,
@@ -153,21 +175,21 @@ class ClientPool:
                 if matching:
                     client = matching[0]
                     self._available.remove(client)
-                    logger.info(f"[pool] Using pre-warmed {model} client")
+                    logger.info(f"{tag} Using pre-warmed {model} client")
                 elif self._available:
                     # Discard non-matching pre-warmed client
                     old = self._available.pop(0)
                     old_model = self._client_models.get(old, "unknown")
-                    logger.info(f"[pool] Discarding pre-warmed {old_model} client, need {model}")
+                    logger.info(f"{tag} Discarding pre-warmed {old_model} client, need {model}")
                     asyncio.create_task(self._disconnect_client_background(old))
 
                 self._in_use += 1
-                self._log_status("Acquired")
+                self._log_status("Acquired", request_id)
 
             # Create fresh if no pre-warmed client was available
             if client is None:
                 client = await self._create_client(model)
-                logger.info(f"[pool] Created fresh {model} client")
+                logger.info(f"{tag} Created fresh {model} client")
 
             yield client
         except Exception:
@@ -178,11 +200,11 @@ class ClientPool:
             # ALWAYS destroy after use — never return to pool
             if client is not None:
                 asyncio.create_task(self._disconnect_client_background(client))
-                logger.info(f"[pool] Destroyed {model} client after use")
+                logger.info(f"{tag} Destroyed {model} client after use")
             # Pre-warm a replacement
             asyncio.create_task(self._prewarm_client(model))
             self._semaphore.release()
-            self._log_status("Released")
+            self._log_status("Released", request_id)
 
     async def _prewarm_client(self, model: str) -> None:
         """Create a fresh client and add to available pool for next request."""

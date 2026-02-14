@@ -23,6 +23,11 @@ class SessionLogger:
         self.chunks: list[tuple[datetime, str]] = []
         self.finish_reason: str | None = None
         self.error: str | None = None
+        self.acquire_ms: int | None = None
+        self.query_ms: int | None = None
+        self.pool_snapshot: dict | None = None
+        self.exception_type: str | None = None
+        self.traceback_str: str | None = None
 
         # Ensure log directory exists
         self.log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
@@ -45,9 +50,21 @@ class SessionLogger:
         """Record the finish reason."""
         self.finish_reason = reason
 
-    def log_error(self, error: str) -> None:
-        """Record an error."""
+    def log_timing(self, acquire_ms: int, query_ms: int) -> None:
+        """Record timing breakdown."""
+        self.acquire_ms = acquire_ms
+        self.query_ms = query_ms
+
+    def log_error(self, error: str, *, exception_type: str | None = None,
+                  traceback_str: str | None = None, pool_snapshot: dict | None = None) -> None:
+        """Record an error with optional diagnostic details."""
         self.error = error
+        if exception_type is not None:
+            self.exception_type = exception_type
+        if traceback_str is not None:
+            self.traceback_str = traceback_str
+        if pool_snapshot is not None:
+            self.pool_snapshot = pool_snapshot
 
     def write(self, messages: list, stream: bool, temperature: float | None, max_tokens: int | None) -> None:
         """Write the complete session log to file."""
@@ -97,6 +114,12 @@ class SessionLogger:
 
         if self.error:
             lines.append(f"[{self._format_time(end_time)}] ERROR: {self.error}")
+            if self.exception_type:
+                lines.append(f"  Exception: {self.exception_type}")
+            if self.traceback_str:
+                lines.append(f"  Traceback:")
+                for tb_line in self.traceback_str.strip().splitlines():
+                    lines.append(f"    {tb_line}")
 
         lines.extend([
             "",
@@ -104,6 +127,21 @@ class SessionLogger:
             f"Start: {self._format_time(self.start_time)}",
             f"End: {self._format_time(end_time)}",
             f"Duration: {duration_ms}ms",
+        ])
+        if self.acquire_ms is not None:
+            lines.append(f"Acquire: {self.acquire_ms}ms")
+        if self.query_ms is not None:
+            lines.append(f"Query: {self.query_ms}ms")
+
+        if self.pool_snapshot:
+            lines.extend([
+                "",
+                "--- POOL STATE ---",
+            ])
+            for key, value in self.pool_snapshot.items():
+                lines.append(f"  {key}: {value}")
+
+        lines.extend([
             "",
             "--- COMPLETE ---",
             "Full response:",
