@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>claudebridge dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.3.0/sse.js"></script>
+    <style>
+        :root { --pico-font-size: 14px; }
+        body { padding: 1rem; }
+        .dashboard { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; min-height: 80vh; }
+        .sidebar { display: flex; flex-direction: column; gap: 1rem; }
+        .panel { border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); padding: 1rem; }
+        .panel h3 { margin-top: 0; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--pico-muted-color); }
+        .request-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-family: monospace; }
+        .request-row:hover { background: var(--pico-muted-border-color); }
+        .request-row.active { background: var(--pico-primary-focus); }
+        .badge { font-size: 0.75rem; padding: 0.15rem 0.4rem; border-radius: 3px; }
+        .badge-ok { background: #2d6a4f; color: #b7e4c7; }
+        .badge-err { background: #9d0208; color: #ffd7d7; }
+        .badge-active { background: #1d3557; color: #a8dadc; }
+        .detail-panel { overflow-y: auto; }
+        .detail-panel pre { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; max-height: 60vh; overflow-y: auto; }
+        .pool-bar { display: flex; gap: 0.3rem; align-items: center; }
+        .pool-dot { width: 12px; height: 12px; border-radius: 50%; }
+        .pool-dot.available { background: #2d6a4f; }
+        .pool-dot.in-use { background: #e9c46a; }
+        .pool-dot.empty { background: var(--pico-muted-border-color); }
+        .elapsed { color: var(--pico-muted-color); }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        header h1 { margin: 0; font-size: 1.2rem; }
+        .empty-state { color: var(--pico-muted-color); font-style: italic; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>claudebridge</h1>
+        <div hx-get="/dashboard/pool" hx-trigger="load, every 3s" hx-swap="innerHTML"></div>
+    </header>
+    <div class="dashboard">
+        <div class="sidebar">
+            <div class="panel" hx-ext="sse" sse-connect="/dashboard/active" sse-swap="message" hx-swap="innerHTML">
+                <h3>Active Requests</h3>
+                <p class="empty-state">No active requests</p>
+            </div>
+            <div class="panel" hx-get="/dashboard/recent" hx-trigger="load, every 5s" hx-swap="innerHTML">
+                <h3>Recent Requests</h3>
+                <p class="empty-state">Loading...</p>
+            </div>
+        </div>
+        <div class="panel detail-panel" id="detail">
+            <h3>Request Detail</h3>
+            <p class="empty-state">Click a request to view details</p>
+        </div>
+    </div>
+</body>
+</html>

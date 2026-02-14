@@ -42,10 +42,12 @@ from .model_mapping import resolve_model, AVAILABLE_MODELS, UnsupportedModelErro
 from .pool import ClientPool
 from .session_logger import SessionLogger
 from .image_utils import has_multimodal_content, openai_content_to_claude, extract_text_from_content
+from .dashboard_state import DashboardState
 from . import __version__
 
 # Pool configuration
 pool: ClientPool | None = None
+dashboard_state = DashboardState()
 
 # Track which unsupported parameter warnings have been shown (log once per param)
 _warned_params: set[str] = set()
@@ -93,6 +95,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Claude Code Bridge", version=__version__, lifespan=lifespan)
+
+# Mount dashboard
+from .dashboard_routes import create_dashboard_router
+
+app.include_router(create_dashboard_router(
+    dashboard_state,
+    pool_status_fn=lambda: pool.status() if pool else {"size": 0, "available": 0, "in_use": 0, "models": []},
+))
 
 # Timeout for Claude SDK calls (in seconds)
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
@@ -401,6 +411,7 @@ async def call_claude_sdk(
     """
     resolved_model = resolve_model(model)
     request_id = session_logger.request_id
+    dashboard_state.request_started(request_id, model)
 
     # Add tool prompt if tools are provided
     effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
@@ -444,6 +455,7 @@ async def call_claude_sdk(
             f"query={session_logger.query_ms}ms total={total_ms}ms"
         )
         session_logger.log_finish(response.finish_reason)
+        dashboard_state.request_completed(request_id)
     except asyncio.TimeoutError:
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
@@ -452,6 +464,7 @@ async def call_claude_sdk(
             exception_type="TimeoutError",
             pool_snapshot=snap,
         )
+        dashboard_state.request_errored(request_id, f"Timeout after {CLAUDE_TIMEOUT}s")
         raise BridgeHTTPException(
             status_code=504,
             detail=f"Claude SDK timed out after {CLAUDE_TIMEOUT}s. Increase CLAUDE_TIMEOUT env var for longer requests.",
@@ -469,6 +482,7 @@ async def call_claude_sdk(
             traceback_str=tb,
             pool_snapshot=snap,
         )
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
         raise
 
     return response
@@ -498,6 +512,7 @@ async def stream_claude_sdk(
     since we're emulating function calling through prompting.
     """
     resolved_model = resolve_model(model)
+    dashboard_state.request_started(request_id, model)
     created = int(time.time())
     start_time = time.monotonic()
     finish_reason = "stop"
@@ -533,6 +548,7 @@ async def stream_claude_sdk(
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             session_logger.log_chunk(block.text)
+                            dashboard_state.chunk_received(request_id, block.text)
                             full_text += block.text
 
                             # If no tools, stream directly; otherwise buffer
@@ -589,6 +605,7 @@ async def stream_claude_sdk(
             f"query={session_logger.query_ms}ms total={total_ms}ms"
         )
         session_logger.log_finish(finish_reason)
+        dashboard_state.request_completed(request_id)
     except asyncio.TimeoutError:
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
@@ -597,6 +614,7 @@ async def stream_claude_sdk(
             exception_type="TimeoutError",
             pool_snapshot=snap,
         )
+        dashboard_state.request_errored(request_id, f"Timeout after {CLAUDE_TIMEOUT}s")
         error_chunk = ChatCompletionChunk(
             id=request_id,
             created=created,
@@ -619,6 +637,7 @@ async def stream_claude_sdk(
             traceback_str=tb,
             pool_snapshot=snap,
         )
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
         error_chunk = ChatCompletionChunk(
             id=request_id,
             created=created,

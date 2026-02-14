@@ -53,6 +53,7 @@ class ClientPool:
         self._in_use = 0
         self._acquire_timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
         self._health_check_task: asyncio.Task | None = None
+        self._background_tasks: set[asyncio.Task] = set()
 
     async def initialize(self) -> None:
         """Pre-spawn all clients with default model."""
@@ -87,6 +88,12 @@ class ClientPool:
         except Exception:
             pass
         self._client_models.pop(client, None)
+
+    def _spawn_background(self, coro) -> None:
+        """Create a tracked background task that cleans up after itself."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def _disconnect_client_background(self, client: ClaudeSDKClient) -> None:
         """Disconnect client in background, logging errors."""
@@ -182,7 +189,7 @@ class ClientPool:
                     old = self._available.pop(0)
                     old_model = self._client_models.get(old, "unknown")
                     logger.info(f"{tag} Discarding pre-warmed {old_model} client, need {model}")
-                    asyncio.create_task(self._disconnect_client_background(old))
+                    self._spawn_background(self._disconnect_client_background(old))
 
                 self._in_use += 1
                 self._log_status("Acquired", request_id)
@@ -201,11 +208,11 @@ class ClientPool:
                 self._in_use -= 1
             # ALWAYS destroy after use — never return to pool
             if client is not None:
-                asyncio.create_task(self._disconnect_client_background(client))
+                self._spawn_background(self._disconnect_client_background(client))
                 status = "after use" if completed else "after cancellation"
                 logger.info(f"{tag} Destroyed {model} client {status}")
             # Pre-warm a replacement
-            asyncio.create_task(self._prewarm_client(model))
+            self._spawn_background(self._prewarm_client(model))
             self._semaphore.release()
             self._log_status("Released", request_id)
 
@@ -269,6 +276,11 @@ class ClientPool:
             except asyncio.CancelledError:
                 pass
             self._health_check_task = None
+
+        # Wait for in-flight background tasks (disconnects, pre-warms)
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
 
         for client in list(self._client_models.keys()):
             await self._disconnect_client(client)

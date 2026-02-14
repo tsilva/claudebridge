@@ -1,0 +1,12 @@
+<div class="pool-bar">
+    {% for i in range(size) %}
+        {% if i < in_use %}
+        <div class="pool-dot in-use" title="in use"></div>
+        {% elif i < in_use + available %}
+        <div class="pool-dot available" title="available"></div>
+        {% else %}
+        <div class="pool-dot empty" title="empty"></div>
+        {% endif %}
+    {% endfor %}
+    <small>{{ available }}/{{ size }} available</small>
+</div>

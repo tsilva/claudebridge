@@ -1,0 +1,27 @@
+<h3>{{ request_id }}</h3>
+<table>
+    <tr><td><strong>Model</strong></td><td>{{ model }}</td></tr>
+    <tr><td><strong>Time</strong></td><td>{{ timestamp }}</td></tr>
+    <tr><td><strong>Duration</strong></td><td>{{ duration_ms }}ms</td></tr>
+    {% if acquire_ms %}<tr><td><strong>Acquire</strong></td><td>{{ acquire_ms }}ms</td></tr>{% endif %}
+    {% if query_ms %}<tr><td><strong>Query</strong></td><td>{{ query_ms }}ms</td></tr>{% endif %}
+    {% if error %}<tr><td><strong>Error</strong></td><td style="color: #ff6b6b;">{{ error }}</td></tr>{% endif %}
+</table>
+{% if is_active %}
+<h4>Live Stream</h4>
+<div hx-ext="sse" sse-connect="/dashboard/stream/{{ request_id }}" sse-swap="chunk" hx-swap="beforeend">
+    <pre id="stream-output">{{ buffered_text }}</pre>
+</div>
+{% else %}
+<h4>Messages</h4>
+{% for msg in messages %}
+<details {% if loop.last %}open{% endif %}>
+    <summary>[{{ msg.role }}]</summary>
+    <pre>{{ msg.content }}</pre>
+</details>
+{% endfor %}
+{% if response %}
+<h4>Response</h4>
+<pre>{{ response }}</pre>
+{% endif %}
+{% endif %}
