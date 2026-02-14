@@ -32,6 +32,12 @@
         header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
         header h1 { margin: 0; font-size: 1.2rem; }
         .empty-state { color: var(--pico-muted-color); font-style: italic; font-size: 0.85rem; }
+        .attachments { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0; }
+        .attachment-img { max-width: 300px; max-height: 300px; border-radius: 4px; border: 1px solid var(--pico-muted-border-color); cursor: pointer; }
+        .attachment-img:hover { opacity: 0.85; }
+        .attachment-link { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.4rem 0.7rem; border-radius: 4px; background: var(--pico-muted-border-color); font-size: 0.8rem; text-decoration: none; color: inherit; }
+        .attachment-link:hover { opacity: 0.8; }
+        .attachment-icon { font-size: 1.2rem; }
     </style>
 </head>
 <body>

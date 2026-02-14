@@ -32,9 +32,23 @@ class DashboardState:
 
     def __init__(self):
         self._active: dict[str, _ActiveRequest] = {}
+        self._change_event = asyncio.Event()
+
+    def _notify(self) -> None:
+        """Signal that the active requests list has changed."""
+        self._change_event.set()
+
+    async def wait_for_change(self, timeout: float = 2.0) -> None:
+        """Wait for a change notification or timeout, then clear the event."""
+        try:
+            await asyncio.wait_for(self._change_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        self._change_event.clear()
 
     def request_started(self, request_id: str, model: str) -> None:
         self._active[request_id] = _ActiveRequest(request_id, model)
+        self._notify()
 
     def chunk_received(self, request_id: str, text: str) -> None:
         req = self._active.get(request_id)
@@ -51,6 +65,7 @@ class DashboardState:
             return
         for q in req._subscribers:
             q.put_nowait({"type": "done"})
+        self._notify()
 
     def request_errored(self, request_id: str, error: str) -> None:
         req = self._active.pop(request_id, None)
@@ -58,6 +73,7 @@ class DashboardState:
             return
         for q in req._subscribers:
             q.put_nowait({"type": "error", "error": error})
+        self._notify()
 
     def get_active_requests(self) -> list[dict]:
         return [r.to_dict() for r in self._active.values()]

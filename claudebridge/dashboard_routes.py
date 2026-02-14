@@ -1,14 +1,18 @@
 """FastAPI routes for the dashboard."""
 
 import asyncio
+import json
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Callable
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+
+logger = logging.getLogger(__name__)
 
 from .dashboard_state import DashboardState
 
@@ -94,6 +98,23 @@ def _parse_log_file(path: Path) -> dict | None:
     if result["request_id"] is None:
         return None
 
+    # Load attachment metadata if available
+    request_id = result["request_id"]
+    att_json = path.parent / f"{request_id}_attachments.json"
+    if att_json.exists():
+        try:
+            att_meta = json.loads(att_json.read_text())
+            # Group by msg_index
+            by_msg: dict[int, list] = {}
+            for entry in att_meta:
+                idx = entry["msg_index"]
+                by_msg.setdefault(idx, []).append(entry)
+            # Attach to each message
+            for i, msg in enumerate(result["messages"]):
+                msg["attachments"] = by_msg.get(i, [])
+        except Exception:
+            pass
+
     return result
 
 
@@ -162,22 +183,32 @@ def create_dashboard_router(
         )
 
     @router.get("/dashboard/active")
-    async def dashboard_active():
-        """SSE endpoint that pushes active requests HTML every 1 second."""
+    async def dashboard_active(request: Request):
+        """SSE endpoint that pushes active requests HTML on change."""
 
         async def event_stream():
-            while True:
-                active = state.get_active_requests()
-                rendered = templates.get_template("active.html").render(
-                    requests=active
-                )
-                # SSE format: data lines
-                yield f"data: {rendered}\n\n"
-                await asyncio.sleep(1)
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    active = state.get_active_requests()
+                    rendered = templates.get_template("active.html").render(
+                        requests=active
+                    )
+                    # SSE multi-line: each line must be prefixed with "data: "
+                    lines = rendered.splitlines()
+                    sse_data = "\n".join(f"data: {line}" for line in lines)
+                    yield f"event: message\n{sse_data}\n\n"
+                    await state.wait_for_change(timeout=2.0)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Error in active requests SSE stream")
 
         return StreamingResponse(
             event_stream(),
             media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     @router.get("/dashboard/request/{request_id}", response_class=HTMLResponse)
@@ -235,6 +266,23 @@ def create_dashboard_router(
             },
         )
 
+    @router.get("/dashboard/attachment/{request_id}/{filename}")
+    async def dashboard_attachment(request_id: str, filename: str):
+        """Serve a saved attachment file."""
+        # Validate request_id format
+        if not re.fullmatch(r"chatcmpl-[a-f0-9]+", request_id):
+            raise HTTPException(status_code=400, detail="Invalid request ID")
+        # Validate filename — no path traversal
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
+        log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+        file_path = log_dir / f"{request_id}_attachments" / filename
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        return FileResponse(file_path)
+
     @router.get("/dashboard/stream/{request_id}")
     async def dashboard_stream(request_id: str):
         """SSE endpoint for live token streaming."""
@@ -253,18 +301,14 @@ def create_dashboard_router(
                             .replace("<", "&lt;")
                             .replace(">", "&gt;")
                         )
-                        yield f"event: chunk\ndata: {escaped}\n\n"
+                        # SSE multi-line: prefix each line with "data: "
+                        data_lines = "\n".join(f"data: {l}" for l in escaped.splitlines()) if "\n" in escaped else f"data: {escaped}"
+                        yield f"event: chunk\n{data_lines}\n\n"
                     elif msg["type"] == "done":
                         yield "event: done\ndata: complete\n\n"
                         return
                     elif msg["type"] == "error":
-                        escaped = (
-                            msg["error"]
-                            .replace("&", "&amp;")
-                            .replace("<", "&lt;")
-                            .replace(">", "&gt;")
-                        )
-                        yield f"event: error\ndata: {escaped}\n\n"
+                        yield f"event: error\ndata: {msg['error']}\n\n"
                         return
             finally:
                 state.unsubscribe(request_id, queue)
@@ -272,6 +316,7 @@ def create_dashboard_router(
         return StreamingResponse(
             event_stream(),
             media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     return router

@@ -1,11 +1,13 @@
 """Session logging for Claude requests."""
 
+import json
 import logging
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .image_utils import extract_text_from_content
+from .image_utils import extract_attachments_from_messages, extract_text_from_content
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +155,43 @@ class SessionLogger:
         with open(self.log_path, "w") as f:
             f.write("\n".join(lines))
 
+        # Save attachments (images, PDFs) as binary files
+        self._save_attachments(messages)
+
         self._cleanup_old_logs()
+
+    def _save_attachments(self, messages: list) -> None:
+        """Save binary attachments and metadata JSON alongside the log file."""
+        try:
+            attachments = extract_attachments_from_messages(messages)
+            if not attachments:
+                return
+
+            att_dir = self.log_dir / f"{self.request_id}_attachments"
+            att_dir.mkdir(parents=True, exist_ok=True)
+
+            metadata = []
+            for att in attachments:
+                entry = {
+                    "msg_index": att.msg_index,
+                    "att_index": att.att_index,
+                    "media_type": att.media_type,
+                    "content_type": att.content_type,
+                    "filename": att.filename,
+                }
+                if att.content_type == "base64" and att.data:
+                    (att_dir / att.filename).write_bytes(att.data)
+                elif att.content_type == "url" and att.url:
+                    entry["url"] = att.url
+                metadata.append(entry)
+
+            meta_path = self.log_dir / f"{self.request_id}_attachments.json"
+            with open(meta_path, "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            logger.info(f"[session_logger] Saved {len(attachments)} attachment(s) for {self.request_id}")
+        except Exception as e:
+            logger.warning(f"[session_logger] Failed to save attachments: {e}")
 
     def _cleanup_old_logs(self) -> None:
         """Delete oldest log files if count exceeds MAX_LOG_FILES."""
@@ -165,6 +203,14 @@ class SessionLogger:
             if len(log_files) > MAX_LOG_FILES:
                 to_delete = log_files[:len(log_files) - MAX_LOG_FILES]
                 for f in to_delete:
+                    # Also delete associated attachment dir and metadata
+                    stem = f.stem
+                    att_dir = self.log_dir / f"{stem}_attachments"
+                    att_json = self.log_dir / f"{stem}_attachments.json"
+                    if att_dir.is_dir():
+                        shutil.rmtree(att_dir)
+                    if att_json.exists():
+                        att_json.unlink()
                     f.unlink()
                 logger.info(f"[session_logger] Cleaned up {len(to_delete)} old log files")
         except Exception as e:

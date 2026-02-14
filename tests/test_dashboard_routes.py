@@ -244,6 +244,7 @@ class TestDashboardActive:
         the returned StreamingResponse has the correct media_type.
         """
         import asyncio
+        from unittest.mock import AsyncMock, MagicMock
         from fastapi.responses import StreamingResponse
 
         state = DashboardState()
@@ -259,10 +260,14 @@ class TestDashboardActive:
 
         assert handler is not None, "Could not find /dashboard/active route"
 
+        # Create a mock Request with is_disconnected
+        mock_request = MagicMock()
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+
         # Call the handler and verify it returns a StreamingResponse
         loop = asyncio.new_event_loop()
         try:
-            resp = loop.run_until_complete(handler())
+            resp = loop.run_until_complete(handler(mock_request))
         finally:
             loop.close()
         assert isinstance(resp, StreamingResponse)

@@ -1,9 +1,94 @@
 """Image format conversion utilities for OpenAI to Claude format."""
 
+import base64
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from .models import ContentPart, TextContent, ImageUrlContent
+
+
+EXTENSION_MAP = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+}
+
+
+@dataclass
+class AttachmentInfo:
+    """Metadata for an attachment extracted from a message."""
+
+    msg_index: int
+    att_index: int
+    media_type: str
+    content_type: str  # "base64" or "url"
+    data: bytes | None  # decoded binary data (base64 only)
+    url: str | None  # original HTTP URL (url only)
+    filename: str  # e.g. "msg0_att0.png"
+
+
+def extract_attachments_from_messages(
+    messages: list,
+) -> list[AttachmentInfo]:
+    """Extract attachment info from multimodal messages.
+
+    For base64 data URLs: decodes to bytes, determines extension.
+    For HTTP URLs: stores the URL string (no download).
+    """
+    attachments: list[AttachmentInfo] = []
+
+    for msg_idx, msg in enumerate(messages):
+        if not isinstance(msg.content, list):
+            continue
+
+        att_idx = 0
+        for part in msg.content:
+            if not isinstance(part, ImageUrlContent):
+                continue
+
+            url = part.image_url.url
+
+            if is_data_url(url):
+                media_type, b64_data = parse_data_url(url)
+                ext = EXTENSION_MAP.get(media_type, ".bin")
+                filename = f"msg{msg_idx}_att{att_idx}{ext}"
+                attachments.append(
+                    AttachmentInfo(
+                        msg_index=msg_idx,
+                        att_index=att_idx,
+                        media_type=media_type,
+                        content_type="base64",
+                        data=base64.b64decode(b64_data),
+                        url=None,
+                        filename=filename,
+                    )
+                )
+            elif is_http_url(url):
+                # Guess extension from URL or default to .png
+                ext = ".png"
+                for mt, e in EXTENSION_MAP.items():
+                    if e[1:] in url.lower():
+                        ext = e
+                        break
+                filename = f"msg{msg_idx}_att{att_idx}{ext}"
+                attachments.append(
+                    AttachmentInfo(
+                        msg_index=msg_idx,
+                        att_index=att_idx,
+                        media_type="image/unknown",
+                        content_type="url",
+                        data=None,
+                        url=url,
+                        filename=filename,
+                    )
+                )
+
+            att_idx += 1
+
+    return attachments
 
 
 def parse_data_url(url: str) -> tuple[str, str]:

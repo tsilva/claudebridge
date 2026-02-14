@@ -18,6 +18,25 @@
 <details {% if loop.last %}open{% endif %}>
     <summary>[{{ msg.role }}]</summary>
     <pre>{{ msg.content }}</pre>
+    {% if msg.attachments %}
+    <div class="attachments">
+        {% for att in msg.attachments %}
+            {% if att.content_type == "url" %}
+                <a href="{{ att.url }}" target="_blank" rel="noopener">
+                    <img class="attachment-img" src="{{ att.url }}" loading="lazy" alt="attachment">
+                </a>
+            {% elif att.media_type.startswith("image/") %}
+                <a href="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" target="_blank">
+                    <img class="attachment-img" src="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" loading="lazy" alt="attachment">
+                </a>
+            {% else %}
+                <a class="attachment-link" href="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" download="{{ att.filename }}">
+                    <span class="attachment-icon">&#128196;</span> {{ att.filename }}
+                </a>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
 </details>
 {% endfor %}
 {% if response %}
