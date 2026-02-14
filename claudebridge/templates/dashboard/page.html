@@ -36,6 +36,9 @@
         header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
         header h1 { margin: 0; font-size: 1.2rem; }
         .empty-state { color: var(--pico-muted-color); font-style: italic; font-size: 0.85rem; }
+        #request-filter { width: 100%; padding: 0.4rem 0.6rem; font-size: 0.8rem; font-family: monospace; background: var(--pico-background-color); color: var(--pico-color); border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); outline: none; margin: 0; }
+        #request-filter:focus { border-color: var(--pico-primary); }
+        #request-filter::placeholder { color: var(--pico-muted-color); }
         .attachments { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0; }
         .attachment-img { max-width: 300px; max-height: 300px; border-radius: 4px; border: 1px solid var(--pico-muted-border-color); cursor: pointer; }
         .attachment-img:hover { opacity: 0.85; }
@@ -51,6 +54,7 @@
     </header>
     <div class="dashboard">
         <div class="sidebar">
+            <input type="text" id="request-filter" placeholder="Filter requests..." autocomplete="off">
             <div id="request-list" class="panel" hx-ext="sse" sse-connect="/dashboard/requests" sse-swap="message" hx-swap="innerHTML">
                 <h3>Requests</h3>
                 <p class="empty-state">Loading...</p>
@@ -65,6 +69,16 @@
         (function() {
             var selectedId = null;
             var listEl = document.getElementById('request-list');
+            var filterEl = document.getElementById('request-filter');
+
+            function applyFilter() {
+                var term = filterEl.value.toLowerCase();
+                listEl.querySelectorAll('.request-row').forEach(function(r) {
+                    r.style.display = (!term || r.textContent.toLowerCase().indexOf(term) !== -1) ? '' : 'none';
+                });
+            }
+
+            filterEl.addEventListener('input', applyFilter);
 
             listEl.addEventListener('click', function(e) {
                 var row = e.target.closest('.request-row');
@@ -76,11 +90,14 @@
             });
 
             document.body.addEventListener('htmx:sseMessage', function(e) {
-                if (!selectedId || !listEl.contains(e.target)) return;
+                if (!listEl.contains(e.target)) return;
                 requestAnimationFrame(function() {
-                    listEl.querySelectorAll('.request-row').forEach(function(r) {
-                        r.classList.toggle('active', r.getAttribute('data-request-id') === selectedId);
-                    });
+                    if (selectedId) {
+                        listEl.querySelectorAll('.request-row').forEach(function(r) {
+                            r.classList.toggle('active', r.getAttribute('data-request-id') === selectedId);
+                        });
+                    }
+                    applyFilter();
                 });
             });
         })();
