@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
@@ -36,15 +36,17 @@ class ClientPool:
     they are destroyed after each request. Background pre-warming hides creation latency.
     """
 
-    def __init__(self, size: int = 3, default_model: str = "opus"):
+    def __init__(self, size: int = 3, default_model: str = "opus", on_change: Callable[[], None] | None = None):
         """Initialize client pool.
 
         Args:
             size: Maximum concurrent clients / pre-warm slots.
             default_model: Model to use for initial pool population.
+            on_change: Optional callback invoked on every state mutation.
         """
         self.size = size
         self.default_model = default_model
+        self._on_change = on_change
         self._client_models: dict[ClaudeSDKClient, str] = {}  # client -> model
         self._available: list[ClaudeSDKClient] = []  # pre-warmed clients
         self._lock = asyncio.Lock()
@@ -54,6 +56,11 @@ class ClientPool:
         self._acquire_timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
         self._health_check_task: asyncio.Task | None = None
         self._background_tasks: set[asyncio.Task] = set()
+
+    def _fire_change(self) -> None:
+        """Invoke on_change callback if set."""
+        if self._on_change is not None:
+            self._on_change()
 
     async def initialize(self) -> None:
         """Pre-spawn all clients with default model."""
@@ -70,6 +77,7 @@ class ClientPool:
 
         self._initialized = True
         self._log_status("Initialized")
+        self._fire_change()
 
         # Start periodic health check
         self._health_check_task = asyncio.create_task(self._periodic_health_check())
@@ -193,6 +201,7 @@ class ClientPool:
 
                 self._in_use += 1
                 self._log_status("Acquired", request_id)
+                self._fire_change()
 
             # Create fresh if no pre-warmed client was available
             if client is None:
@@ -206,6 +215,7 @@ class ClientPool:
         finally:
             async with self._lock:
                 self._in_use -= 1
+                self._fire_change()
             # ALWAYS destroy after use — never return to pool
             if client is not None:
                 self._spawn_background(self._disconnect_client_background(client))
@@ -224,8 +234,10 @@ class ClientPool:
                 if len(self._available) + self._in_use < self.size:
                     self._available.append(client)
                     logger.info(f"[pool] Pre-warmed {model} client")
+                    self._fire_change()
                 else:
                     await self._disconnect_client(client)
+                    self._fire_change()
         except Exception as e:
             logger.warning(f"[pool] Pre-warm failed: {e}")
 
@@ -256,10 +268,12 @@ class ClientPool:
                     if client in self._available:
                         self._available.remove(client)
                 await self._disconnect_client(client)
+                self._fire_change()
                 try:
                     new_client = await self._create_client(model)
                     async with self._lock:
                         self._available.append(new_client)
+                    self._fire_change()
                     logger.info(f"[pool] Health check: replaced unresponsive {model} client")
                 except Exception as e:
                     logger.error(f"[pool] Health check: failed to replace client: {e}")
@@ -288,5 +302,6 @@ class ClientPool:
         self._available.clear()
         self._initialized = False
         self._in_use = 0
+        self._fire_change()
 
         logger.info("[pool] Shutdown complete")

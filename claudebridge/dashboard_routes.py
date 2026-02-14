@@ -195,6 +195,36 @@ def create_dashboard_router(
             },
         )
 
+    @router.get("/dashboard/pool/stream")
+    async def dashboard_pool_stream(request: Request):
+        """SSE endpoint that pushes pool status HTML on change."""
+
+        async def event_stream():
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    status = pool_status_fn()
+                    rendered = templates.get_template("pool.html").render(
+                        size=status.get("size", 0),
+                        available=status.get("available", 0),
+                        in_use=status.get("in_use", 0),
+                    )
+                    lines = rendered.splitlines()
+                    sse_data = "\n".join(f"data: {line}" for line in lines)
+                    yield f"event: message\n{sse_data}\n\n"
+                    await state.wait_for_pool_change(timeout=5.0)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Error in pool SSE stream")
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     def _get_merged_requests(limit: int = 20) -> list[dict]:
         """Merge active and completed requests into a single list.
 

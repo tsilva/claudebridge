@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
     timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
     port = int(os.environ.get("PORT", 8082))
 
-    pool = ClientPool(size=pool_size, default_model="opus")
+    pool = ClientPool(size=pool_size, default_model="opus", on_change=dashboard_state.notify_pool_change)
     try:
         await pool.initialize()
     except Exception as e:
@@ -776,6 +776,7 @@ def main():
     # Set worker count for lifespan initialization
     os.environ["POOL_SIZE"] = str(args.workers)
 
+    print(f"Dashboard: http://127.0.0.1:{args.port}/dashboard")
     uvicorn.run(app, host="127.0.0.1", port=args.port)
 
 

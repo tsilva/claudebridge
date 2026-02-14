@@ -38,12 +38,25 @@ class DashboardState:
     def __init__(self):
         self._active: dict[str, _ActiveRequest] = {}
         self._change_event = asyncio.Event()
+        self._pool_change_event = asyncio.Event()
         self._recent_usage: dict[str, dict[str, int]] = {}
         self._recent_order: list[str] = []
 
     def _notify(self) -> None:
         """Signal that the active requests list has changed."""
         self._change_event.set()
+
+    def notify_pool_change(self) -> None:
+        """Signal that pool status has changed."""
+        self._pool_change_event.set()
+
+    async def wait_for_pool_change(self, timeout: float = 5.0) -> None:
+        """Wait for a pool change notification or timeout, then clear the event."""
+        try:
+            await asyncio.wait_for(self._pool_change_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        self._pool_change_event.clear()
 
     async def wait_for_change(self, timeout: float = 2.0) -> None:
         """Wait for a change notification or timeout, then clear the event."""

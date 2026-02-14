@@ -50,7 +50,7 @@
 <body>
     <header>
         <h1>claudebridge</h1>
-        <div hx-get="/dashboard/pool" hx-trigger="load, every 3s" hx-swap="innerHTML"></div>
+        <div hx-ext="sse" sse-connect="/dashboard/pool/stream" sse-swap="message" hx-swap="innerHTML"></div>
     </header>
     <div class="dashboard">
         <div class="sidebar">
