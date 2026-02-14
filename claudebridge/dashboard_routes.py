@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 from .dashboard_state import DashboardState
 
+
+def _mask_api_key(api_key: str | None) -> str:
+    """Mask API key for display, showing only first 8 chars."""
+    if not api_key or api_key == "anonymous":
+        return "anonymous"
+    if len(api_key) <= 8:
+        return api_key
+    return api_key[:8] + "..."
+
 TEMPLATES_DIR = Path(__file__).parent / "templates" / "dashboard"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -34,6 +43,7 @@ def _parse_log_file(path: Path) -> dict | None:
     result: dict = {
         "request_id": None,
         "model": None,
+        "api_key": None,
         "timestamp": None,
         "duration_ms": None,
         "acquire_ms": None,
@@ -53,6 +63,9 @@ def _parse_log_file(path: Path) -> dict | None:
             result["request_id"] = stripped[len("SESSION: "):]
         elif stripped.startswith("MODEL: "):
             result["model"] = stripped[len("MODEL: "):]
+        elif stripped.startswith("API_KEY: "):
+            val = stripped[len("API_KEY: "):]
+            result["api_key"] = None if val == "anonymous" else val
         elif stripped.startswith("TIMESTAMP: "):
             result["timestamp"] = stripped[len("TIMESTAMP: "):]
         elif stripped.startswith("Duration: "):
@@ -191,11 +204,13 @@ def create_dashboard_router(
         active = state.get_active_requests()
         for req in active:
             req["is_active"] = True
+            req["api_key"] = _mask_api_key(req.get("api_key"))
         active.sort(key=lambda r: r["elapsed_s"])  # lowest elapsed = newest
 
         completed = _get_recent_logs(limit=limit)
         for log in completed:
             log["is_active"] = False
+            log["api_key"] = _mask_api_key(log.get("api_key"))
             # Supplement with cached usage if log file didn't have it
             if log.get("input_tokens") is None:
                 usage = state.get_usage(log["request_id"])
@@ -253,6 +268,7 @@ def create_dashboard_router(
                 {
                     "request_id": request_id,
                     "model": active["model"],
+                    "api_key": _mask_api_key(active.get("api_key")),
                     "timestamp": "",
                     "duration_ms": int(active["elapsed_s"] * 1000),
                     "acquire_ms": None,
@@ -280,6 +296,7 @@ def create_dashboard_router(
             {
                 "request_id": parsed["request_id"],
                 "model": parsed["model"],
+                "api_key": _mask_api_key(parsed.get("api_key")),
                 "timestamp": parsed.get("timestamp", ""),
                 "duration_ms": parsed.get("duration_ms", 0),
                 "acquire_ms": parsed.get("acquire_ms"),

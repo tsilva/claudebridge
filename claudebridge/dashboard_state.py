@@ -7,11 +7,12 @@ import time
 class _ActiveRequest:
     """Tracks a single in-flight request."""
 
-    __slots__ = ("request_id", "model", "start_time", "status", "chunks_received", "_subscribers")
+    __slots__ = ("request_id", "model", "api_key", "start_time", "status", "chunks_received", "_subscribers")
 
-    def __init__(self, request_id: str, model: str):
+    def __init__(self, request_id: str, model: str, api_key: str | None = None):
         self.request_id = request_id
         self.model = model
+        self.api_key = api_key
         self.start_time = time.monotonic()
         self.status = "active"
         self.chunks_received = 0
@@ -21,6 +22,7 @@ class _ActiveRequest:
         return {
             "request_id": self.request_id,
             "model": self.model,
+            "api_key": self.api_key,
             "elapsed_s": round(time.monotonic() - self.start_time, 2),
             "status": self.status,
             "chunks_received": self.chunks_received,
@@ -51,8 +53,8 @@ class DashboardState:
             pass
         self._change_event.clear()
 
-    def request_started(self, request_id: str, model: str) -> None:
-        self._active[request_id] = _ActiveRequest(request_id, model)
+    def request_started(self, request_id: str, model: str, api_key: str | None = None) -> None:
+        self._active[request_id] = _ActiveRequest(request_id, model, api_key=api_key)
         self._notify()
 
     def chunk_received(self, request_id: str, text: str) -> None:

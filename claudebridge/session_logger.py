@@ -18,9 +18,10 @@ MAX_LOG_FILES = int(os.environ.get("MAX_LOG_FILES", 1000))
 class SessionLogger:
     """Logs a single Claude request/response session to a plain text file."""
 
-    def __init__(self, request_id: str, model: str):
+    def __init__(self, request_id: str, model: str, api_key: str | None = None):
         self.request_id = request_id
         self.model = model
+        self.api_key = api_key
         self.start_time = datetime.now(timezone.utc)
         self.chunks: list[tuple[datetime, str]] = []
         self.finish_reason: str | None = None
@@ -86,6 +87,7 @@ class SessionLogger:
             f"SESSION: {self.request_id}",
             f"TIMESTAMP: {self._format_timestamp(self.start_time)}",
             f"MODEL: {self.model}",
+            f"API_KEY: {self.api_key or 'anonymous'}",
             "=" * 80,
             "",
             "--- REQUEST ---",

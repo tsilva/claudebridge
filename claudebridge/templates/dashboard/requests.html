@@ -12,6 +12,9 @@
         <span class="badge badge-ok">ok</span>
         <span class="badge">{{ req.model }}</span>
         {% endif %}
+        {% if req.api_key and req.api_key != "anonymous" %}
+        <span class="badge badge-key">{{ req.api_key }}</span>
+        {% endif %}
     </span>
     <span class="elapsed">{% if req.is_active %}{{ req.elapsed_s }}s{% else %}{{ req.duration_ms }}ms{% endif %}{% if not req.is_active and (req.input_tokens is not none or req.output_tokens is not none) %} <span class="tokens">{{ (req.input_tokens or 0) + (req.output_tokens or 0) }}t</span>{% endif %}</span>
 </div>

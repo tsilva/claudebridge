@@ -411,7 +411,7 @@ async def call_claude_sdk(
     """
     resolved_model = resolve_model(model)
     request_id = session_logger.request_id
-    dashboard_state.request_started(request_id, model)
+    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key)
 
     # Add tool prompt if tools are provided
     effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
@@ -518,7 +518,7 @@ async def stream_claude_sdk(
     since we're emulating function calling through prompting.
     """
     resolved_model = resolve_model(model)
-    dashboard_state.request_started(request_id, model)
+    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key)
     created = int(time.time())
     start_time = time.monotonic()
     finish_reason = "stop"
@@ -673,7 +673,7 @@ async def stream_claude_sdk(
 
 
 @app.post("/api/v1/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     """OpenAI-compatible chat completions endpoint.
 
     Note: Concurrency is managed by the client pool (POOL_SIZE env var).
@@ -691,8 +691,10 @@ async def chat_completions(request: ChatCompletionRequest):
     _warn_unsupported_params(request)
 
     request_id = f"chatcmpl-{uuid4().hex[:12]}"
+    auth = http_request.headers.get("authorization", "")
+    api_key = auth.removeprefix("Bearer ").strip() or None if auth else None
     prompt = format_messages(request.messages)
-    session_logger = SessionLogger(request_id, request.model)
+    session_logger = SessionLogger(request_id, request.model, api_key=api_key)
 
     if request.stream:
         async def stream_with_logging():
