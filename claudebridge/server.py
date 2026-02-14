@@ -681,8 +681,10 @@ async def chat_completions(request: ChatCompletionRequest):
             media_type="text/event-stream",
         )
 
-    response = await call_claude_sdk(prompt, request.model, session_logger, request.tools)
-    session_logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
+    try:
+        response = await call_claude_sdk(prompt, request.model, session_logger, request.tools)
+    finally:
+        session_logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
 
     response_message = Message(
         role="assistant",

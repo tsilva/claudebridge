@@ -167,6 +167,7 @@ class ClientPool:
             )
 
         client: ClaudeSDKClient | None = None
+        completed = False
 
         try:
             async with self._lock:
@@ -192,6 +193,7 @@ class ClientPool:
                 logger.info(f"{tag} Created fresh {model} client")
 
             yield client
+            completed = True
         except Exception:
             raise
         finally:
@@ -200,7 +202,8 @@ class ClientPool:
             # ALWAYS destroy after use — never return to pool
             if client is not None:
                 asyncio.create_task(self._disconnect_client_background(client))
-                logger.info(f"{tag} Destroyed {model} client after use")
+                status = "after use" if completed else "after cancellation"
+                logger.info(f"{tag} Destroyed {model} client {status}")
             # Pre-warm a replacement
             asyncio.create_task(self._prewarm_client(model))
             self._semaphore.release()
