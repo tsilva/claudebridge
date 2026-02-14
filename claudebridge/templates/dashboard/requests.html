@@ -1,7 +1,7 @@
 <h3>Requests</h3>
 {% if requests %}
 {% for req in requests %}
-<div class="request-row{% if req.is_active %} request-row-active{% endif %}" hx-get="/dashboard/request/{{ req.request_id }}" hx-target="#detail" hx-swap="innerHTML">
+<div class="request-row{% if req.is_active %} request-row-active{% endif %}" data-request-id="{{ req.request_id }}" hx-get="/dashboard/request/{{ req.request_id }}" hx-target="#detail" hx-swap="innerHTML">
     <span>{{ req.request_id[-8:] }}
         {% if req.is_active %}
         <span class="badge badge-active">{{ req.model }}</span>

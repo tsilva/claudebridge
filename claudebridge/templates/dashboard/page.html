@@ -49,7 +49,7 @@
     </header>
     <div class="dashboard">
         <div class="sidebar">
-            <div class="panel" hx-ext="sse" sse-connect="/dashboard/requests" sse-swap="message" hx-swap="innerHTML">
+            <div id="request-list" class="panel" hx-ext="sse" sse-connect="/dashboard/requests" sse-swap="message" hx-swap="innerHTML">
                 <h3>Requests</h3>
                 <p class="empty-state">Loading...</p>
             </div>
@@ -59,5 +59,29 @@
             <p class="empty-state">Click a request to view details</p>
         </div>
     </div>
+    <script>
+        (function() {
+            var selectedId = null;
+            var listEl = document.getElementById('request-list');
+
+            listEl.addEventListener('click', function(e) {
+                var row = e.target.closest('.request-row');
+                if (!row) return;
+                selectedId = row.getAttribute('data-request-id');
+                listEl.querySelectorAll('.request-row').forEach(function(r) {
+                    r.classList.toggle('active', r.getAttribute('data-request-id') === selectedId);
+                });
+            });
+
+            document.body.addEventListener('htmx:sseMessage', function(e) {
+                if (!selectedId || !listEl.contains(e.target)) return;
+                requestAnimationFrame(function() {
+                    listEl.querySelectorAll('.request-row').forEach(function(r) {
+                        r.classList.toggle('active', r.getAttribute('data-request-id') === selectedId);
+                    });
+                });
+            });
+        })();
+    </script>
 </body>
 </html>

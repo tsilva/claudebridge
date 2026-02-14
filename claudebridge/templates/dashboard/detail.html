@@ -11,6 +11,11 @@
 <h4>Live Stream</h4>
 <div hx-ext="sse" sse-connect="/dashboard/stream/{{ request_id }}" sse-swap="chunk" hx-swap="beforeend">
     <pre id="stream-output">{{ buffered_text }}</pre>
+    <div hx-get="/dashboard/request/{{ request_id }}"
+         hx-trigger="sse:done delay:500ms, sse:error delay:500ms"
+         hx-target="#detail"
+         hx-swap="innerHTML"
+         style="display:none"></div>
 </div>
 {% else %}
 <h4>Messages</h4>
