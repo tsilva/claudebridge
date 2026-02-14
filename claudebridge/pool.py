@@ -1,4 +1,4 @@
-"""Client pool for reduced latency via connection reuse with dynamic model replacement."""
+"""Single-use client pool with pre-warming for zero cross-contamination."""
 
 import asyncio
 import logging
@@ -6,12 +6,10 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, ResultMessage
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 logger = logging.getLogger(__name__)
 
-# Timeout for clear command (seconds)
-CLEAR_TIMEOUT = 10
 # Health check interval (seconds)
 HEALTH_CHECK_INTERVAL = 60
 
@@ -32,24 +30,23 @@ def make_options(model: str, max_tokens: int | None = None) -> ClaudeAgentOption
 
 
 class ClientPool:
-    """Pool of persistent ClaudeSDKClient instances with dynamic model replacement.
+    """Single-use client pool with background pre-warming.
 
-    Maintains a pool of pre-connected clients that can be reused across requests.
-    Tracks model per client and replaces clients on-demand when different model is requested.
-    Prefers reusing clients with matching models to avoid replacement overhead.
+    Each request gets a fresh (or pre-warmed) client. Clients are NEVER reused —
+    they are destroyed after each request. Background pre-warming hides creation latency.
     """
 
     def __init__(self, size: int = 3, default_model: str = "opus"):
         """Initialize client pool.
 
         Args:
-            size: Number of clients to maintain in the pool.
+            size: Maximum concurrent clients / pre-warm slots.
             default_model: Model to use for initial pool population.
         """
         self.size = size
         self.default_model = default_model
         self._client_models: dict[ClaudeSDKClient, str] = {}  # client -> model
-        self._available: list[ClaudeSDKClient] = []  # available clients
+        self._available: list[ClaudeSDKClient] = []  # pre-warmed clients
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(size)  # limits concurrent usage
         self._initialized = False
@@ -76,21 +73,6 @@ class ClientPool:
         # Start periodic health check
         self._health_check_task = asyncio.create_task(self._periodic_health_check())
 
-    async def _clear_client_state(self, client: ClaudeSDKClient) -> None:
-        """Clear conversation state using /clear command with timeout."""
-        try:
-            await asyncio.wait_for(self._do_clear(client), timeout=CLEAR_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning("[pool] /clear timed out, replacing client")
-            raise
-
-    async def _do_clear(self, client: ClaudeSDKClient) -> None:
-        """Execute the /clear command."""
-        await client.query("/clear")
-        async for msg in client.receive_response():
-            if isinstance(msg, ResultMessage):
-                break
-
     async def _create_client(self, model: str) -> ClaudeSDKClient:
         """Create and connect a new client with specified model."""
         client = ClaudeSDKClient(make_options(model))
@@ -105,6 +87,13 @@ class ClientPool:
         except Exception:
             pass
         self._client_models.pop(client, None)
+
+    async def _disconnect_client_background(self, client: ClaudeSDKClient) -> None:
+        """Disconnect client in background, logging errors."""
+        try:
+            await self._disconnect_client(client)
+        except Exception as e:
+            logger.warning(f"[pool] Background disconnect failed: {e}")
 
     def _log_status(self, action: str) -> None:
         """Log current pool status with model breakdown."""
@@ -130,10 +119,10 @@ class ClientPool:
 
     @asynccontextmanager
     async def acquire(self, model: str) -> AsyncIterator[ClaudeSDKClient]:
-        """Get a client for the specified model, replacing if necessary.
+        """Get a fresh client for the specified model.
 
-        If a client with the matching model is available, use it.
-        Otherwise, replace an available client with a new one for the requested model.
+        Takes a pre-warmed client with matching model if available,
+        otherwise creates a new one. Client is ALWAYS destroyed after use.
 
         Args:
             model: Model name (opus, sonnet, haiku).
@@ -142,10 +131,10 @@ class ClientPool:
             A ClaudeSDKClient configured for the specified model.
 
         Raises:
-            HTTPException: 503 if acquire times out waiting for a client.
+            HTTPException: 503 if acquire times out waiting for a slot.
         """
         try:
-            acquired = await asyncio.wait_for(
+            await asyncio.wait_for(
                 self._semaphore.acquire(), timeout=self._acquire_timeout
             )
         except asyncio.TimeoutError:
@@ -156,93 +145,57 @@ class ClientPool:
             )
 
         client: ClaudeSDKClient | None = None
-        replaced = False
 
         try:
             async with self._lock:
-                # Find client with matching model
+                # Take a pre-warmed client with matching model if available
                 matching = [c for c in self._available if self._client_models[c] == model]
                 if matching:
                     client = matching[0]
                     self._available.remove(client)
-                    logger.info(f"[pool] Using existing {model} client")
+                    logger.info(f"[pool] Using pre-warmed {model} client")
                 elif self._available:
-                    # Take client out; will replace outside lock
-                    old_client = self._available.pop(0)
-                    old_model = self._client_models[old_client]
-                    logger.info(f"[pool] Replacing {old_model} client with {model}")
-                    replaced = True
-                else:
-                    # No available clients (shouldn't happen with semaphore)
-                    logger.warning("[pool] No available clients, creating new one")
+                    # Discard non-matching pre-warmed client
+                    old = self._available.pop(0)
+                    old_model = self._client_models.get(old, "unknown")
+                    logger.info(f"[pool] Discarding pre-warmed {old_model} client, need {model}")
+                    asyncio.create_task(self._disconnect_client_background(old))
 
                 self._in_use += 1
-                self._log_status("Acquired" + (" (replacing)" if replaced else ""))
+                self._log_status("Acquired")
 
-            # Client replacement happens outside the lock
-            if replaced:
-                await self._disconnect_client(old_client)
+            # Create fresh if no pre-warmed client was available
+            if client is None:
                 client = await self._create_client(model)
-            elif client is None:
-                client = await self._create_client(model)
-
-            # Clear conversation state before use (with timeout)
-            try:
-                await self._clear_client_state(client)
-            except (asyncio.TimeoutError, Exception) as clear_err:
-                # Clear failed — replace the client
-                logger.warning(f"[pool] Clear failed: {clear_err}, replacing client")
-                await self._disconnect_client(client)
-                client = await self._create_client(model)
-                # Don't try to clear the fresh client — it's already clean
+                logger.info(f"[pool] Created fresh {model} client")
 
             yield client
-
-        except Exception as e:
-            # If something went wrong, try to replace the client
-            logger.warning(f"[pool] Client error: {e}")
-            if client is not None:
-                try:
-                    await self._disconnect_client(client)
-                    client = await self._create_client(model)
-                    logger.info("[pool] Client replaced after error")
-                except Exception:
-                    logger.error("[pool] Failed to replace client after error")
-                    # Schedule background recovery to restore pool size
-                    asyncio.create_task(self._recover_client(model))
-                    client = None
+        except Exception:
             raise
         finally:
             async with self._lock:
                 self._in_use -= 1
-                if client is not None:
-                    self._available.append(client)
-                elif self._in_use + len(self._available) < self.size:
-                    # Pool shrank — schedule recovery
-                    asyncio.create_task(self._recover_client(self.default_model))
-                self._log_status("Released")
+            # ALWAYS destroy after use — never return to pool
+            if client is not None:
+                asyncio.create_task(self._disconnect_client_background(client))
+                logger.info(f"[pool] Destroyed {model} client after use")
+            # Pre-warm a replacement
+            asyncio.create_task(self._prewarm_client(model))
             self._semaphore.release()
+            self._log_status("Released")
 
-    async def _recover_client(self, model: str) -> None:
-        """Background task to restore pool to full size after a client is lost."""
-        for attempt in range(3):
-            try:
-                client = await self._create_client(model)
-                async with self._lock:
-                    if len(self._available) + self._in_use < self.size:
-                        self._available.append(client)
-                        logger.info("[pool] Recovery: client restored")
-                        self._log_status("Recovered")
-                    else:
-                        # Pool is already full, disconnect the extra client
-                        await self._disconnect_client(client)
-                return
-            except Exception as e:
-                wait = 2 ** attempt
-                logger.warning(f"[pool] Recovery attempt {attempt + 1} failed: {e}, retrying in {wait}s")
-                await asyncio.sleep(wait)
-
-        logger.error("[pool] Recovery failed after 3 attempts, pool may be degraded")
+    async def _prewarm_client(self, model: str) -> None:
+        """Create a fresh client and add to available pool for next request."""
+        try:
+            client = await self._create_client(model)
+            async with self._lock:
+                if len(self._available) + self._in_use < self.size:
+                    self._available.append(client)
+                    logger.info(f"[pool] Pre-warmed {model} client")
+                else:
+                    await self._disconnect_client(client)
+        except Exception as e:
+            logger.warning(f"[pool] Pre-warm failed: {e}")
 
     async def _periodic_health_check(self) -> None:
         """Background task that checks idle client health every HEALTH_CHECK_INTERVAL seconds."""
@@ -254,13 +207,16 @@ class ClientPool:
                 logger.warning(f"[pool] Health check error: {e}")
 
     async def _check_idle_clients(self) -> None:
-        """Check each idle client is responsive, replace if not."""
+        """Check each idle client's process is alive, replace if not."""
         async with self._lock:
             clients_to_check = list(self._available)
 
         for client in clients_to_check:
             try:
-                await asyncio.wait_for(self._do_clear(client), timeout=CLEAR_TIMEOUT)
+                # Check if the underlying process is still alive
+                if hasattr(client, '_process') and client._process is not None:
+                    if client._process.returncode is not None:
+                        raise RuntimeError("Process exited")
             except Exception:
                 model = self._client_models.get(client, self.default_model)
                 logger.warning(f"[pool] Health check: {model} client unresponsive, replacing")
@@ -275,7 +231,6 @@ class ClientPool:
                     logger.info(f"[pool] Health check: replaced unresponsive {model} client")
                 except Exception as e:
                     logger.error(f"[pool] Health check: failed to replace client: {e}")
-                    asyncio.create_task(self._recover_client(model))
 
     async def shutdown(self) -> None:
         """Disconnect all clients and clean up."""

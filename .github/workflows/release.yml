@@ -1,97 +1,15 @@
 name: Release
-
 on:
   push:
     branches: [main]
-    paths:
-      - pyproject.toml
-      - claudebridge/__init__.py
-
+    paths: [pyproject.toml]
 permissions:
   contents: write
   id-token: write
-
 concurrency:
   group: release
   cancel-in-progress: false
-
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Run unit tests
-        run: uv run pytest tests/ -m unit -v --tb=short
-
-  pii-scan:
-    uses: tsilva/.github/.github/workflows/pii-scan.yml@main
-
-  publish-pypi:
-    needs: [test, pii-scan]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: pypi
-    outputs:
-      version: ${{ steps.check.outputs.version }}
-      tag_exists: ${{ steps.check.outputs.tag_exists }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check version
-        id: check
-        uses: tsilva/.github/.github/actions/check-version@main
-
-      - name: Setup uv
-        if: steps.check.outputs.tag_exists == 'false'
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-
-      - name: Build package
-        if: steps.check.outputs.tag_exists == 'false'
-        run: uv build
-
-      - name: Create release
-        if: steps.check.outputs.tag_exists == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create ${{ steps.check.outputs.tag }} dist/* --generate-notes
-
-      - name: Publish to PyPI
-        if: steps.check.outputs.tag_exists == 'false'
-        uses: pypa/gh-action-pypi-publish@release/v1
-
-  update-homebrew:
-    needs: publish-pypi
-    if: needs.publish-pypi.outputs.tag_exists == 'false'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Wait for PyPI propagation
-        run: sleep 60
-
-      - name: Trigger tap formula update
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          gh workflow run update-formula.yml \
-            --repo tsilva/homebrew-tap \
-            --field version=${{ needs.publish-pypi.outputs.version }}
+  release:
+    uses: tsilva/.github/.github/workflows/release.yml@main
+    secrets: inherit
