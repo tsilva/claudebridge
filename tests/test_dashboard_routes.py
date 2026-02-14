@@ -219,25 +219,11 @@ class TestDashboardPool:
 
 
 @pytest.mark.unit
-class TestDashboardRecent:
-    """Tests for GET /dashboard/recent."""
-
-    def test_returns_html(self, tmp_path, monkeypatch):
-        """Recent endpoint returns HTML."""
-        monkeypatch.setenv("LOG_DIR", str(tmp_path))
-        app = _make_app()
-        client = TestClient(app)
-        resp = client.get("/dashboard/recent")
-        assert resp.status_code == 200
-        assert "text/html" in resp.headers["content-type"]
-
-
-@pytest.mark.unit
-class TestDashboardActive:
-    """Tests for GET /dashboard/active."""
+class TestDashboardRequests:
+    """Tests for GET /dashboard/requests."""
 
     def test_returns_sse_content_type(self):
-        """Active endpoint returns SSE content-type.
+        """Requests endpoint returns SSE content-type.
 
         The SSE endpoint is an infinite streaming generator so we cannot consume it
         with TestClient.  Instead we invoke the route handler directly and verify
@@ -251,14 +237,14 @@ class TestDashboardActive:
         pool_fn = lambda: {"size": 3, "available": 2, "in_use": 1}
         router = create_dashboard_router(state, pool_fn)
 
-        # Find the route handler for /dashboard/active
+        # Find the route handler for /dashboard/requests
         handler = None
         for route in router.routes:
-            if hasattr(route, "path") and route.path == "/dashboard/active":
+            if hasattr(route, "path") and route.path == "/dashboard/requests":
                 handler = route.endpoint
                 break
 
-        assert handler is not None, "Could not find /dashboard/active route"
+        assert handler is not None, "Could not find /dashboard/requests route"
 
         # Create a mock Request with is_disconnected
         mock_request = MagicMock()
@@ -272,6 +258,49 @@ class TestDashboardActive:
             loop.close()
         assert isinstance(resp, StreamingResponse)
         assert resp.media_type == "text/event-stream"
+
+    def test_sse_contains_active_and_completed(self, tmp_path, monkeypatch):
+        """SSE stream renders both active and completed requests."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from fastapi.responses import StreamingResponse
+
+        monkeypatch.setenv("LOG_DIR", str(tmp_path))
+        log_path = tmp_path / "chatcmpl-done1.log"
+        log_path.write_text(SAMPLE_LOG.replace("chatcmpl-abc123", "chatcmpl-done1"))
+
+        state = DashboardState()
+        state.request_started("chatcmpl-live1", "sonnet")
+        pool_fn = lambda: {"size": 3, "available": 2, "in_use": 1}
+        router = create_dashboard_router(state, pool_fn)
+
+        handler = None
+        for route in router.routes:
+            if hasattr(route, "path") and route.path == "/dashboard/requests":
+                handler = route.endpoint
+                break
+
+        mock_request = MagicMock()
+        # Return False first (render one frame), then True (disconnect)
+        mock_request.is_disconnected = AsyncMock(side_effect=[False, True])
+
+        loop = asyncio.new_event_loop()
+        try:
+            resp = loop.run_until_complete(handler(mock_request))
+            # Consume the first SSE event
+            chunks = []
+            async def collect():
+                async for chunk in resp.body_iterator:
+                    chunks.append(chunk)
+                    break  # just first event
+            loop.run_until_complete(collect())
+        finally:
+            loop.close()
+
+        content = "".join(chunks)
+        assert "chatcmpl-live1" in content or "live1" in content
+        assert "chatcmpl-done1" in content or "done1" in content
+        assert "request-row-active" in content
 
 
 @pytest.mark.unit

@@ -6,7 +6,7 @@
     <title>claudebridge dashboard</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script src="https://unpkg.com/htmx-ext-sse@2.3.0/sse.js"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.4/sse.js"></script>
     <style>
         :root { --pico-font-size: 14px; }
         body { padding: 1rem; }
@@ -17,6 +17,8 @@
         .request-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-family: monospace; }
         .request-row:hover { background: var(--pico-muted-border-color); }
         .request-row.active { background: var(--pico-primary-focus); }
+        .request-row-active { background: rgba(168, 218, 220, 0.1); border-left: 3px solid #a8dadc; }
+        .request-row-active:hover { background: rgba(168, 218, 220, 0.18); }
         .badge { font-size: 0.75rem; padding: 0.15rem 0.4rem; border-radius: 3px; }
         .badge-ok { background: #2d6a4f; color: #b7e4c7; }
         .badge-err { background: #9d0208; color: #ffd7d7; }
@@ -47,12 +49,8 @@
     </header>
     <div class="dashboard">
         <div class="sidebar">
-            <div class="panel" hx-ext="sse" sse-connect="/dashboard/active" sse-swap="message" hx-swap="innerHTML">
-                <h3>Active Requests</h3>
-                <p class="empty-state">No active requests</p>
-            </div>
-            <div class="panel" hx-get="/dashboard/recent" hx-trigger="load, every 5s" hx-swap="innerHTML">
-                <h3>Recent Requests</h3>
+            <div class="panel" hx-ext="sse" sse-connect="/dashboard/requests" sse-swap="message" hx-swap="innerHTML">
+                <h3>Requests</h3>
                 <p class="empty-state">Loading...</p>
             </div>
         </div>

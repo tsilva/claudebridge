@@ -172,28 +172,36 @@ def create_dashboard_router(
             },
         )
 
-    @router.get("/dashboard/recent", response_class=HTMLResponse)
-    async def dashboard_recent(request: Request):
-        """Render recent requests fragment."""
-        logs = _get_recent_logs()
-        return templates.TemplateResponse(
-            request,
-            "recent.html",
-            {"logs": logs},
-        )
+    def _get_merged_requests(limit: int = 20) -> list[dict]:
+        """Merge active and completed requests into a single list.
 
-    @router.get("/dashboard/active")
-    async def dashboard_active(request: Request):
-        """SSE endpoint that pushes active requests HTML on change."""
+        Active requests appear first (newest first), then completed (newest first).
+        Each item has an ``is_active`` flag.
+        """
+        active = state.get_active_requests()
+        for req in active:
+            req["is_active"] = True
+        active.sort(key=lambda r: r["elapsed_s"])  # lowest elapsed = newest
+
+        completed = _get_recent_logs(limit=limit)
+        for log in completed:
+            log["is_active"] = False
+
+        merged = active + completed
+        return merged[:limit]
+
+    @router.get("/dashboard/requests")
+    async def dashboard_requests(request: Request):
+        """SSE endpoint that pushes unified requests HTML on change."""
 
         async def event_stream():
             try:
                 while True:
                     if await request.is_disconnected():
                         break
-                    active = state.get_active_requests()
-                    rendered = templates.get_template("active.html").render(
-                        requests=active
+                    merged = _get_merged_requests()
+                    rendered = templates.get_template("requests.html").render(
+                        requests=merged
                     )
                     # SSE multi-line: each line must be prefixed with "data: "
                     lines = rendered.splitlines()
@@ -203,7 +211,7 @@ def create_dashboard_router(
             except asyncio.CancelledError:
                 pass
             except Exception:
-                logger.exception("Error in active requests SSE stream")
+                logger.exception("Error in requests SSE stream")
 
         return StreamingResponse(
             event_stream(),
