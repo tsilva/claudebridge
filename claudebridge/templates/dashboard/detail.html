@@ -5,6 +5,7 @@
     <tr><td><strong>Duration</strong></td><td>{{ duration_ms }}ms</td></tr>
     {% if acquire_ms %}<tr><td><strong>Acquire</strong></td><td>{{ acquire_ms }}ms</td></tr>{% endif %}
     {% if query_ms %}<tr><td><strong>Query</strong></td><td>{{ query_ms }}ms</td></tr>{% endif %}
+    {% if input_tokens is not none or output_tokens is not none %}<tr><td><strong>Tokens</strong></td><td>{{ input_tokens|default(0, true) }} in / {{ output_tokens|default(0, true) }} out</td></tr>{% endif %}
     {% if error %}<tr><td><strong>Error</strong></td><td style="color: #ff6b6b;">{{ error }}</td></tr>{% endif %}
 </table>
 {% if is_active %}

@@ -38,6 +38,8 @@ def _parse_log_file(path: Path) -> dict | None:
         "duration_ms": None,
         "acquire_ms": None,
         "query_ms": None,
+        "input_tokens": None,
+        "output_tokens": None,
         "error": None,
         "messages": [],
         "response": None,
@@ -65,6 +67,14 @@ def _parse_log_file(path: Path) -> dict | None:
             m = re.match(r"Query:\s*(\d+)ms", stripped)
             if m:
                 result["query_ms"] = int(m.group(1))
+        elif stripped.startswith("Input tokens: "):
+            m = re.match(r"Input tokens:\s*(\d+)", stripped)
+            if m:
+                result["input_tokens"] = int(m.group(1))
+        elif stripped.startswith("Output tokens: "):
+            m = re.match(r"Output tokens:\s*(\d+)", stripped)
+            if m:
+                result["output_tokens"] = int(m.group(1))
         elif "] ERROR: " in stripped:
             # Lines like [HH:MM:SS.mmm] ERROR: some error
             error_match = re.search(r"\] ERROR: (.+)$", stripped)
@@ -186,6 +196,12 @@ def create_dashboard_router(
         completed = _get_recent_logs(limit=limit)
         for log in completed:
             log["is_active"] = False
+            # Supplement with cached usage if log file didn't have it
+            if log.get("input_tokens") is None:
+                usage = state.get_usage(log["request_id"])
+                if usage:
+                    log["input_tokens"] = usage.get("prompt_tokens")
+                    log["output_tokens"] = usage.get("completion_tokens")
 
         merged = active + completed
         return merged[:limit]
@@ -241,6 +257,8 @@ def create_dashboard_router(
                     "duration_ms": int(active["elapsed_s"] * 1000),
                     "acquire_ms": None,
                     "query_ms": None,
+                    "input_tokens": None,
+                    "output_tokens": None,
                     "error": None,
                     "is_active": True,
                     "buffered_text": "",
@@ -266,6 +284,8 @@ def create_dashboard_router(
                 "duration_ms": parsed.get("duration_ms", 0),
                 "acquire_ms": parsed.get("acquire_ms"),
                 "query_ms": parsed.get("query_ms"),
+                "input_tokens": parsed.get("input_tokens"),
+                "output_tokens": parsed.get("output_tokens"),
                 "error": parsed.get("error"),
                 "is_active": False,
                 "buffered_text": "",

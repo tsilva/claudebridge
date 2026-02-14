@@ -433,6 +433,10 @@ async def call_claude_sdk(
                     # Capture usage data from result
                     if msg.usage:
                         response.usage = msg.usage
+                        session_logger.log_usage(
+                            msg.usage.get("input_tokens", 0),
+                            msg.usage.get("output_tokens", 0),
+                        )
                     break
             query_ms = int((time.monotonic() - query_start) * 1000)
             session_logger.log_timing(acquire_ms, query_ms)
@@ -450,12 +454,14 @@ async def call_claude_sdk(
                 session_logger.log_chunk(f"[parsed tool_call: {tool_calls[0].function.name}]")
 
         total_ms = (session_logger.acquire_ms or 0) + (session_logger.query_ms or 0)
+        usage = response.get_usage()
         logging.info(
             f"[{request_id}] Completed | acquire={session_logger.acquire_ms}ms "
-            f"query={session_logger.query_ms}ms total={total_ms}ms"
+            f"query={session_logger.query_ms}ms total={total_ms}ms "
+            f"tokens={usage['prompt_tokens']}in/{usage['completion_tokens']}out"
         )
         session_logger.log_finish(response.finish_reason)
-        dashboard_state.request_completed(request_id)
+        dashboard_state.request_completed(request_id, usage=usage)
     except asyncio.TimeoutError:
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
@@ -570,6 +576,7 @@ async def stream_claude_sdk(
                             completion_tokens=completion_tokens,
                             total_tokens=prompt_tokens + completion_tokens,
                         )
+                        session_logger.log_usage(prompt_tokens, completion_tokens)
                     break
             query_ms = int((time.monotonic() - query_start) * 1000)
             session_logger.log_timing(acquire_ms, query_ms)
@@ -600,12 +607,14 @@ async def stream_claude_sdk(
                 yield f"data: {chunk.model_dump_json()}\n\n"
 
         total_ms = (session_logger.acquire_ms or 0) + (session_logger.query_ms or 0)
+        usage_dict = stream_usage.model_dump() if stream_usage else {}
         logging.info(
             f"[{request_id}] Completed | acquire={session_logger.acquire_ms}ms "
-            f"query={session_logger.query_ms}ms total={total_ms}ms"
+            f"query={session_logger.query_ms}ms total={total_ms}ms "
+            f"tokens={usage_dict.get('prompt_tokens', 0)}in/{usage_dict.get('completion_tokens', 0)}out"
         )
         session_logger.log_finish(finish_reason)
-        dashboard_state.request_completed(request_id)
+        dashboard_state.request_completed(request_id, usage=usage_dict)
     except asyncio.TimeoutError:
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")

@@ -30,9 +30,14 @@ class _ActiveRequest:
 class DashboardState:
     """Tracks active requests so the dashboard can display them and stream tokens."""
 
+    # How many recently completed requests to keep usage data for
+    _RECENT_LIMIT = 50
+
     def __init__(self):
         self._active: dict[str, _ActiveRequest] = {}
         self._change_event = asyncio.Event()
+        self._recent_usage: dict[str, dict[str, int]] = {}
+        self._recent_order: list[str] = []
 
     def _notify(self) -> None:
         """Signal that the active requests list has changed."""
@@ -59,13 +64,24 @@ class DashboardState:
         for q in req._subscribers:
             q.put_nowait(msg)
 
-    def request_completed(self, request_id: str) -> None:
+    def request_completed(self, request_id: str, usage: dict | None = None) -> None:
         req = self._active.pop(request_id, None)
         if req is None:
             return
+        if usage:
+            self._recent_usage[request_id] = usage
+            self._recent_order.append(request_id)
+            # Evict old entries
+            while len(self._recent_order) > self._RECENT_LIMIT:
+                old_id = self._recent_order.pop(0)
+                self._recent_usage.pop(old_id, None)
         for q in req._subscribers:
             q.put_nowait({"type": "done"})
         self._notify()
+
+    def get_usage(self, request_id: str) -> dict[str, int] | None:
+        """Return cached usage for a recently completed request."""
+        return self._recent_usage.get(request_id)
 
     def request_errored(self, request_id: str, error: str) -> None:
         req = self._active.pop(request_id, None)

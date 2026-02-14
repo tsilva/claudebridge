@@ -30,6 +30,8 @@ class SessionLogger:
         self.pool_snapshot: dict | None = None
         self.exception_type: str | None = None
         self.traceback_str: str | None = None
+        self.input_tokens: int | None = None
+        self.output_tokens: int | None = None
 
         # Ensure log directory exists
         self.log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
@@ -56,6 +58,11 @@ class SessionLogger:
         """Record timing breakdown."""
         self.acquire_ms = acquire_ms
         self.query_ms = query_ms
+
+    def log_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Record token usage."""
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
     def log_error(self, error: str, *, exception_type: str | None = None,
                   traceback_str: str | None = None, pool_snapshot: dict | None = None) -> None:
@@ -134,6 +141,16 @@ class SessionLogger:
             lines.append(f"Acquire: {self.acquire_ms}ms")
         if self.query_ms is not None:
             lines.append(f"Query: {self.query_ms}ms")
+
+        if self.input_tokens is not None or self.output_tokens is not None:
+            lines.extend([
+                "",
+                "--- USAGE ---",
+            ])
+            if self.input_tokens is not None:
+                lines.append(f"Input tokens: {self.input_tokens}")
+            if self.output_tokens is not None:
+                lines.append(f"Output tokens: {self.output_tokens}")
 
         if self.pool_snapshot:
             lines.extend([
