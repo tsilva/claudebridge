@@ -1,4 +1,12 @@
-<h3>{{ request_id }}</h3>
+<h3>{{ request_id }}
+    {% if is_active %}
+    <span class="badge badge-active">active</span>
+    {% elif error %}
+    <span class="badge badge-err">err</span>
+    {% else %}
+    <span class="badge badge-ok">ok</span>
+    {% endif %}
+</h3>
 <table>
     <tr><td><strong>Model</strong></td><td>{{ model }}</td></tr>
     <tr><td><strong>Time</strong></td><td>{{ timestamp }}</td></tr>
