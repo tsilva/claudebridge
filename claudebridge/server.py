@@ -14,12 +14,52 @@ from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
-)
+# ANSI colors
+_DIM = "\033[2m"
+_BOLD = "\033[1m"
+_CYAN = "\033[36m"
+_YELLOW = "\033[33m"
+_RED = "\033[31m"
+_GREEN = "\033[32m"
+_RESET = "\033[0m"
+
+
+class _BridgeFormatter(logging.Formatter):
+    """Colored log output: dim timestamps, yellow warnings, red errors."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = f"{_DIM}{self.formatTime(record, '%H:%M:%S')}{_RESET}"
+        msg = record.getMessage()
+        if record.levelno >= logging.ERROR:
+            return f"{ts} {_RED}{record.levelname}{_RESET} {msg}"
+        if record.levelno >= logging.WARNING:
+            return f"{ts} {_YELLOW}{record.levelname}{_RESET} {msg}"
+        return f"{ts} {msg}"
+
+
+class _SuppressSDKNoise(logging.Filter):
+    """Drop noisy SDK messages like 'Using bundled Claude Code CLI: ...'."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "Using bundled Claude Code CLI" in msg:
+            return False
+        return True
+
+
+def _configure_logging() -> None:
+    """Set up bridge-style logging: clean timestamps, suppressed SDK noise."""
+    handler = logging.StreamHandler()
+    handler.setFormatter(_BridgeFormatter())
+    handler.addFilter(_SuppressSDKNoise())
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    # Suppress verbose SDK internals
+    logging.getLogger("claude_agent_sdk").setLevel(logging.WARNING)
 
 from .models import (
     ChatCompletionRequest,
@@ -87,9 +127,6 @@ async def lifespan(app: FastAPI):
         logging.error(f"Failed to initialize pool: {e}")
         raise
 
-    logging.info(
-        f"claudebridge v{__version__} started | port={port} workers={pool_size} timeout={timeout}s"
-    )
     yield
     await pool.shutdown()
 
@@ -762,6 +799,17 @@ def get_version() -> str:
     return f"{__version__} ({GIT_HASH})"
 
 
+def _print_banner(port: int, workers: int, model: str, timeout: int) -> None:
+    """Print clean startup banner with colors."""
+    version = get_version()
+    print(f"\n  {_BOLD}claudebridge{_RESET} {_DIM}v{version}{_RESET}\n")
+    print(f"  {_DIM}Dashboard{_RESET}  {_CYAN}http://127.0.0.1:{port}/dashboard{_RESET}")
+    print(f"  {_DIM}API{_RESET}        {_CYAN}http://127.0.0.1:{port}/api/v1{_RESET}")
+    print(f"  {_DIM}Workers{_RESET}    {_BOLD}{workers}{_RESET} {_DIM}({model}){_RESET}")
+    print(f"  {_DIM}Timeout{_RESET}    {timeout}s")
+    print()
+
+
 def main():
     """Entry point for CLI."""
     import argparse
@@ -773,11 +821,29 @@ def main():
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8082)), help="Server port (default: 8082)")
     args = parser.parse_args()
 
+    timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
+
     # Set worker count for lifespan initialization
     os.environ["POOL_SIZE"] = str(args.workers)
 
-    print(f"Dashboard: http://127.0.0.1:{args.port}/dashboard")
-    uvicorn.run(app, host="127.0.0.1", port=args.port)
+    _configure_logging()
+    _print_banner(args.port, args.workers, "opus", timeout)
+
+    # Suppress uvicorn's default INFO noise
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=args.port,
+        log_config={
+            "version": 1,
+            "disable_existing_loggers": False,
+            "loggers": {
+                "uvicorn": {"level": "WARNING"},
+                "uvicorn.error": {"level": "WARNING"},
+                "uvicorn.access": {"level": "WARNING"},
+            },
+        },
+    )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,12 @@ from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 logger = logging.getLogger(__name__)
 
+# ANSI colors
+_DIM = "\033[2m"
+_GREEN = "\033[32m"
+_CYAN = "\033[36m"
+_RESET = "\033[0m"
+
 # Health check interval (seconds)
 HEALTH_CHECK_INTERVAL = 60
 
@@ -67,16 +73,18 @@ class ClientPool:
         if self._initialized:
             return
 
-        logger.info(f"[pool] Initializing with {self.size} {self.default_model} clients...")
+        label = "client" if self.size == 1 else "clients"
+        logger.info(f"{_CYAN}[pool]{_RESET} Warming {self.size} {self.default_model} {label}...")
         for i in range(self.size):
             client = ClaudeSDKClient(make_options(self.default_model))
             await client.connect()
             self._client_models[client] = self.default_model
             self._available.append(client)
-            logger.info(f"[pool] Client {i + 1}/{self.size} connected ({self.default_model})")
+            if self.size > 1:
+                logger.info(f"{_CYAN}[pool]{_RESET} Client {i + 1}/{self.size} connected {_DIM}({self.default_model}){_RESET}")
 
         self._initialized = True
-        self._log_status("Initialized")
+        logger.info(f"{_CYAN}[pool]{_RESET} {_GREEN}Ready{_RESET} | available={len(self._available)}")
         self._fire_change()
 
         # Start periodic health check
