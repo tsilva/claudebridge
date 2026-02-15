@@ -14,10 +14,11 @@ from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# ANSI colors
+# Claude palette (24-bit true color)
+_CLAUDE = "\033[38;2;218;119;86m"   # Terracotta — Claude's signature orange
+_CLAUDE_DIM = "\033[38;2;171;93;67m"  # Muted terracotta for secondary accents
 _DIM = "\033[2m"
 _BOLD = "\033[1m"
-_CYAN = "\033[36m"
 _YELLOW = "\033[33m"
 _RED = "\033[31m"
 _GREEN = "\033[32m"
@@ -802,12 +803,12 @@ def get_version() -> str:
 def _print_banner(port: int, workers: int, model: str, timeout: int) -> None:
     """Print clean startup banner with ASCII art bridge and colors."""
     version = get_version()
-    print(f"\n  {_CYAN}   ╭───╮       ╭───╮{_RESET}")
-    print(f"  {_CYAN}═══╯   ╰═══════╯   ╰═══{_RESET}")
-    print(f"  {_DIM}   │   │       │   │{_RESET}")
-    print(f"  {_BOLD}claudebridge{_RESET} {_DIM}v{version}{_RESET}\n")
-    print(f"  {_DIM}Dashboard{_RESET}  {_CYAN}http://127.0.0.1:{port}/dashboard{_RESET}")
-    print(f"  {_DIM}API{_RESET}        {_CYAN}http://127.0.0.1:{port}/api/v1{_RESET}")
+    print(f"\n  {_CLAUDE}   ╭───╮       ╭───╮{_RESET}")
+    print(f"  {_CLAUDE}═══╯   ╰═══════╯   ╰═══{_RESET}")
+    print(f"  {_CLAUDE_DIM}   │   │       │   │{_RESET}")
+    print(f"  {_BOLD}{_CLAUDE}claudebridge{_RESET} {_DIM}v{version}{_RESET}\n")
+    print(f"  {_DIM}Dashboard{_RESET}  {_CLAUDE}http://127.0.0.1:{port}/dashboard{_RESET}")
+    print(f"  {_DIM}API{_RESET}        {_CLAUDE}http://127.0.0.1:{port}/api/v1{_RESET}")
     print(f"  {_DIM}Workers{_RESET}    {_BOLD}{workers}{_RESET} {_DIM}({model}){_RESET}")
     print(f"  {_DIM}Timeout{_RESET}    {timeout}s")
     print()

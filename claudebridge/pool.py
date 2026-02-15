@@ -10,10 +10,10 @@ from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 logger = logging.getLogger(__name__)
 
-# ANSI colors
+# Claude palette (24-bit true color)
+_CLAUDE = "\033[38;2;218;119;86m"   # Terracotta — Claude's signature orange
 _DIM = "\033[2m"
 _GREEN = "\033[32m"
-_CYAN = "\033[36m"
 _RESET = "\033[0m"
 
 # Health check interval (seconds)
@@ -74,17 +74,17 @@ class ClientPool:
             return
 
         label = "client" if self.size == 1 else "clients"
-        logger.info(f"{_CYAN}[pool]{_RESET} Warming {self.size} {self.default_model} {label}...")
+        logger.info(f"{_CLAUDE}[pool]{_RESET} Warming {self.size} {self.default_model} {label}...")
         for i in range(self.size):
             client = ClaudeSDKClient(make_options(self.default_model))
             await client.connect()
             self._client_models[client] = self.default_model
             self._available.append(client)
             if self.size > 1:
-                logger.info(f"{_CYAN}[pool]{_RESET} Client {i + 1}/{self.size} connected {_DIM}({self.default_model}){_RESET}")
+                logger.info(f"{_CLAUDE}[pool]{_RESET} Client {i + 1}/{self.size} connected {_DIM}({self.default_model}){_RESET}")
 
         self._initialized = True
-        logger.info(f"{_CYAN}[pool]{_RESET} {_GREEN}Ready{_RESET} | available={len(self._available)}")
+        logger.info(f"{_CLAUDE}[pool]{_RESET} {_GREEN}Ready{_RESET} | available={len(self._available)}")
         self._fire_change()
 
         # Start periodic health check
