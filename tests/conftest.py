@@ -1,13 +1,12 @@
 """Pytest configuration for claudebridge tests."""
 
+import os
 from pathlib import Path
 
 import pytest
 import httpx
 
-from claudebridge.url_utils import resolve_bridge_url
-
-SERVER_URL = resolve_bridge_url()
+SERVER_URL = os.environ.get("BRIDGE_URL", "http://localhost:8082")
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 

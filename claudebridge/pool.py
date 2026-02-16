@@ -1,12 +1,12 @@
 """Single-use client pool with pre-warming for zero cross-contamination."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Callable
-
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,10 @@ _RESET = "\033[0m"
 HEALTH_CHECK_INTERVAL = 60
 
 
-def make_options(model: str, max_tokens: int | None = None) -> ClaudeAgentOptions:
+def make_options(model: str, max_tokens: int | None = None):
     """Create ClaudeAgentOptions with model."""
+    from claude_agent_sdk import ClaudeAgentOptions
+
     opts = ClaudeAgentOptions(
         max_turns=1,
         setting_sources=None,  # Don't load user filesystem settings
@@ -76,9 +78,7 @@ class ClientPool:
         label = "client" if self.size == 1 else "clients"
         logger.info(f"{_CLAUDE}[pool]{_RESET} Warming {self.size} {self.default_model} {label}...")
         for i in range(self.size):
-            client = ClaudeSDKClient(make_options(self.default_model))
-            await client.connect()
-            self._client_models[client] = self.default_model
+            client = await self._create_client(self.default_model)
             self._available.append(client)
             if self.size > 1:
                 logger.info(f"{_CLAUDE}[pool]{_RESET} Client {i + 1}/{self.size} connected {_DIM}({self.default_model}){_RESET}")
@@ -92,6 +92,8 @@ class ClientPool:
 
     async def _create_client(self, model: str) -> ClaudeSDKClient:
         """Create and connect a new client with specified model."""
+        from claude_agent_sdk import ClaudeSDKClient
+
         client = ClaudeSDKClient(make_options(model))
         await client.connect()
         self._client_models[client] = model

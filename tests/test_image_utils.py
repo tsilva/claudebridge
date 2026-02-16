@@ -9,7 +9,7 @@ Usage:
 
 import pytest
 
-from claudebridge.image_utils import (
+from claudebridge.server import (
     parse_data_url,
     is_http_url,
     is_data_url,

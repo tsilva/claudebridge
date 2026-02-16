@@ -35,7 +35,7 @@
         .elapsed { color: var(--pico-muted-color); }
         .tokens { color: #a8dadc; font-size: 0.75rem; }
         header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-        header h1 { margin: 0; font-size: 1.2rem; }
+        header h1 { margin: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 0.4rem; }
         .empty-state { color: var(--pico-muted-color); font-style: italic; font-size: 0.85rem; }
         #request-filter { width: 100%; padding: 0.4rem 0.6rem; font-size: 0.8rem; font-family: monospace; background: var(--pico-background-color); color: var(--pico-color); border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); outline: none; margin: 0; }
         #request-filter:focus { border-color: var(--pico-primary); }
@@ -59,7 +59,19 @@
 </head>
 <body>
     <header>
-        <h1>claudebridge</h1>
+        <h1>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 24" width="1.4em" height="1em" fill="none" stroke="#89b4fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="2" y1="16" x2="30" y2="16" />
+                <path d="M4 16 Q16 4 28 16" fill="none" />
+                <line x1="10" y1="16" x2="10" y2="11.2" stroke-opacity="0.5" stroke-width="1.5" />
+                <line x1="16" y1="16" x2="16" y2="7" stroke-opacity="0.5" stroke-width="1.5" />
+                <line x1="22" y1="16" x2="22" y2="11.2" stroke-opacity="0.5" stroke-width="1.5" />
+                <line x1="4" y1="16" x2="4" y2="20" />
+                <line x1="28" y1="16" x2="28" y2="20" />
+                <line x1="1" y1="20" x2="31" y2="20" stroke-opacity="0.3" stroke-width="1" />
+            </svg>
+            claudebridge
+        </h1>
         <div hx-ext="sse" sse-connect="/dashboard/pool/stream" sse-swap="message" hx-swap="innerHTML"></div>
     </header>
     <div class="dashboard">

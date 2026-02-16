@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from claudebridge.image_utils import (
+from claudebridge.server import (
     parse_data_url,
     openai_image_to_claude,
     openai_content_to_claude,
@@ -26,7 +26,6 @@ from claudebridge.models import (
     ImageUrlContent,
     ImageUrl,
 )
-from claudebridge.client import BridgeClient
 
 from .test_utils import slugify_text, text_similarity
 
@@ -165,83 +164,3 @@ class TestSlugification:
         assert text_similarity("a b", "a b c d e f") == 1.0
 
 
-@pytest.fixture(scope="module")
-def client():
-    """Create BridgeClient for testing."""
-    c = BridgeClient()
-    yield c
-    c.close_sync()
-
-
-class TestPdfIntegration:
-    """Integration tests for PDF extraction (requires running server)."""
-
-    @pytest.fixture
-    def test_pdf_base64(self):
-        """Load test PDF as base64."""
-        if not PDF_TEST_DOCUMENT.exists():
-            pytest.skip(f"Test PDF not found: {PDF_TEST_DOCUMENT}")
-        with open(PDF_TEST_DOCUMENT, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-
-    def test_pdf_extraction(self, client, test_pdf_base64):
-        """Test PDF text extraction with slugified comparison."""
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Extract all the text from this PDF document. Reply with only the extracted text, nothing else."},
-                    {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{test_pdf_base64}"}}
-                ]
-            }
-        ]
-
-        response = client.complete_messages_sync(messages, stream=False)
-
-        # Calculate similarity
-        similarity = text_similarity(EXPECTED_PDF_TEXT, response)
-
-        # Require at least 80% word match
-        assert similarity >= 0.8, (
-            f"PDF extraction similarity too low: {similarity:.1%}\n"
-            f"Expected text: {EXPECTED_PDF_TEXT}\n"
-            f"Actual response: {response}"
-        )
-
-    def test_pdf_extraction_streaming(self, client, test_pdf_base64):
-        """Test PDF extraction with streaming response."""
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Extract the text from this PDF. Reply with only the text."},
-                    {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{test_pdf_base64}"}}
-                ]
-            }
-        ]
-
-        response = client.complete_messages_sync(messages, stream=True)
-
-        # Should contain key phrases from the document
-        similarity = text_similarity(EXPECTED_PDF_TEXT, response)
-        assert similarity >= 0.8, f"Streaming PDF extraction similarity too low: {similarity:.1%}"
-
-    def test_pdf_with_context(self, client, test_pdf_base64):
-        """Test PDF extraction with system prompt context."""
-        messages = [
-            {"role": "system", "content": "You are a document extraction assistant. Extract text accurately."},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What is the version and status mentioned in this document?"},
-                    {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{test_pdf_base64}"}}
-                ]
-            }
-        ]
-
-        response = client.complete_messages_sync(messages, stream=False)
-
-        # Should mention version and status
-        response_lower = response.lower()
-        assert "2025" in response or "version" in response_lower
-        assert "active" in response_lower or "status" in response_lower

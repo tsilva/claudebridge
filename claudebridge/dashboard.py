@@ -1,10 +1,11 @@
-"""FastAPI routes for the dashboard."""
+"""Dashboard state tracking and FastAPI routes."""
 
 import asyncio
 import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -14,8 +15,142 @@ from fastapi.templating import Jinja2Templates
 
 logger = logging.getLogger(__name__)
 
-from .dashboard_state import DashboardState
 
+# ---------------------------------------------------------------------------
+# In-memory state
+# ---------------------------------------------------------------------------
+
+class _ActiveRequest:
+    """Tracks a single in-flight request."""
+
+    __slots__ = ("request_id", "model", "api_key", "start_time", "status", "chunks_received", "messages", "buffered_text", "_subscribers")
+
+    def __init__(self, request_id: str, model: str, api_key: str | None = None, messages: list[dict] | None = None):
+        self.request_id = request_id
+        self.model = model
+        self.api_key = api_key
+        self.start_time = time.monotonic()
+        self.status = "active"
+        self.chunks_received = 0
+        self.messages = messages or []
+        self.buffered_text = ""
+        self._subscribers: list[asyncio.Queue] = []
+
+    def to_dict(self) -> dict:
+        return {
+            "request_id": self.request_id,
+            "model": self.model,
+            "api_key": self.api_key,
+            "elapsed_s": round(time.monotonic() - self.start_time, 2),
+            "status": self.status,
+            "chunks_received": self.chunks_received,
+            "messages": self.messages,
+            "buffered_text": self.buffered_text,
+        }
+
+
+class DashboardState:
+    """Tracks active requests so the dashboard can display them and stream tokens."""
+
+    # How many recently completed requests to keep usage data for
+    _RECENT_LIMIT = 50
+
+    def __init__(self):
+        self._active: dict[str, _ActiveRequest] = {}
+        self._change_event = asyncio.Event()
+        self._pool_change_event = asyncio.Event()
+        self._recent_usage: dict[str, dict[str, int]] = {}
+        self._recent_order: list[str] = []
+
+    def _notify(self) -> None:
+        """Signal that the active requests list has changed."""
+        self._change_event.set()
+
+    def notify_pool_change(self) -> None:
+        """Signal that pool status has changed."""
+        self._pool_change_event.set()
+
+    async def wait_for_pool_change(self, timeout: float = 5.0) -> None:
+        """Wait for a pool change notification or timeout, then clear the event."""
+        try:
+            await asyncio.wait_for(self._pool_change_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        self._pool_change_event.clear()
+
+    async def wait_for_change(self, timeout: float = 2.0) -> None:
+        """Wait for a change notification or timeout, then clear the event."""
+        try:
+            await asyncio.wait_for(self._change_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        self._change_event.clear()
+
+    def request_started(self, request_id: str, model: str, api_key: str | None = None, messages: list[dict] | None = None) -> None:
+        self._active[request_id] = _ActiveRequest(request_id, model, api_key=api_key, messages=messages)
+        self._notify()
+
+    def chunk_received(self, request_id: str, text: str) -> None:
+        req = self._active.get(request_id)
+        if req is None:
+            return
+        req.chunks_received += 1
+        req.buffered_text += text
+        msg = {"type": "chunk", "text": text}
+        for q in req._subscribers:
+            q.put_nowait(msg)
+
+    def request_completed(self, request_id: str, usage: dict | None = None) -> None:
+        req = self._active.pop(request_id, None)
+        if req is None:
+            return
+        if usage:
+            self._recent_usage[request_id] = usage
+            self._recent_order.append(request_id)
+            # Evict old entries
+            while len(self._recent_order) > self._RECENT_LIMIT:
+                old_id = self._recent_order.pop(0)
+                self._recent_usage.pop(old_id, None)
+        for q in req._subscribers:
+            q.put_nowait({"type": "done"})
+        self._notify()
+
+    def get_usage(self, request_id: str) -> dict[str, int] | None:
+        """Return cached usage for a recently completed request."""
+        return self._recent_usage.get(request_id)
+
+    def request_errored(self, request_id: str, error: str) -> None:
+        req = self._active.pop(request_id, None)
+        if req is None:
+            return
+        for q in req._subscribers:
+            q.put_nowait({"type": "error", "error": error})
+        self._notify()
+
+    def get_active_requests(self) -> list[dict]:
+        return [r.to_dict() for r in self._active.values()]
+
+    def subscribe(self, request_id: str) -> asyncio.Queue | None:
+        req = self._active.get(request_id)
+        if req is None:
+            return None
+        q: asyncio.Queue = asyncio.Queue()
+        req._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, request_id: str, queue: asyncio.Queue) -> None:
+        req = self._active.get(request_id)
+        if req is None:
+            return
+        try:
+            req._subscribers.remove(queue)
+        except ValueError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Route helpers
+# ---------------------------------------------------------------------------
 
 def _mask_api_key(api_key: str | None) -> str:
     """Mask API key for display, showing only first 8 chars."""
@@ -25,120 +160,25 @@ def _mask_api_key(api_key: str | None) -> str:
         return api_key
     return api_key[:8] + "..."
 
+
 TEMPLATES_DIR = Path(__file__).parent / "templates" / "dashboard"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 def _parse_log_file(path: Path) -> dict | None:
-    """Parse a session log file into a structured dict.
+    """Parse a session log file (JSON format) into a structured dict.
 
-    Returns dict with: request_id, model, timestamp, duration_ms, acquire_ms,
-    query_ms, error, messages, response.  Returns None if the file cannot be parsed.
+    Returns dict with session data or None if the file cannot be parsed.
+    Only accepts dicts with a ``request_id`` key (skips attachment manifests, etc.).
     """
     try:
-        text = path.read_text()
-    except OSError:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or "request_id" not in data:
+            return None
+        return data
+    except (OSError, json.JSONDecodeError):
         return None
-
-    result: dict = {
-        "request_id": None,
-        "model": None,
-        "api_key": None,
-        "timestamp": None,
-        "duration_ms": None,
-        "acquire_ms": None,
-        "query_ms": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "error": None,
-        "messages": [],
-        "response": None,
-    }
-
-    for line in text.splitlines():
-        stripped = line.strip()
-
-        # Header fields
-        if stripped.startswith("SESSION: "):
-            result["request_id"] = stripped[len("SESSION: "):]
-        elif stripped.startswith("MODEL: "):
-            result["model"] = stripped[len("MODEL: "):]
-        elif stripped.startswith("API_KEY: "):
-            val = stripped[len("API_KEY: "):]
-            result["api_key"] = None if val == "anonymous" else val
-        elif stripped.startswith("TIMESTAMP: "):
-            result["timestamp"] = stripped[len("TIMESTAMP: "):]
-        elif stripped.startswith("Duration: "):
-            m = re.match(r"Duration:\s*(\d+)ms", stripped)
-            if m:
-                result["duration_ms"] = int(m.group(1))
-        elif stripped.startswith("Acquire: "):
-            m = re.match(r"Acquire:\s*(\d+)ms", stripped)
-            if m:
-                result["acquire_ms"] = int(m.group(1))
-        elif stripped.startswith("Query: "):
-            m = re.match(r"Query:\s*(\d+)ms", stripped)
-            if m:
-                result["query_ms"] = int(m.group(1))
-        elif stripped.startswith("Input tokens: "):
-            m = re.match(r"Input tokens:\s*(\d+)", stripped)
-            if m:
-                result["input_tokens"] = int(m.group(1))
-        elif stripped.startswith("Output tokens: "):
-            m = re.match(r"Output tokens:\s*(\d+)", stripped)
-            if m:
-                result["output_tokens"] = int(m.group(1))
-        elif "] ERROR: " in stripped:
-            # Lines like [HH:MM:SS.mmm] ERROR: some error
-            error_match = re.search(r"\] ERROR: (.+)$", stripped)
-            if error_match:
-                result["error"] = error_match.group(1)
-
-    # Parse messages: lines like [user] Hello / [assistant] Hi
-    msg_pattern = re.compile(r"^\[(\w+)\] (.+)$")
-    in_messages = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "Messages:":
-            in_messages = True
-            continue
-        if in_messages:
-            m = msg_pattern.match(stripped)
-            if m:
-                result["messages"].append({"role": m.group(1), "content": m.group(2)})
-            elif stripped.startswith("Parameters:") or stripped == "":
-                if stripped.startswith("Parameters:"):
-                    in_messages = False
-
-    # Parse full response: text between "Full response:" and "===" line
-    resp_match = re.search(
-        r"Full response:\n(.*?)(?=\n={3,})", text, re.DOTALL
-    )
-    if resp_match:
-        result["response"] = resp_match.group(1)
-
-    # Only return if we got at least a request_id
-    if result["request_id"] is None:
-        return None
-
-    # Load attachment metadata if available
-    request_id = result["request_id"]
-    att_json = path.parent / f"{request_id}_attachments.json"
-    if att_json.exists():
-        try:
-            att_meta = json.loads(att_json.read_text())
-            # Group by msg_index
-            by_msg: dict[int, list] = {}
-            for entry in att_meta:
-                idx = entry["msg_index"]
-                by_msg.setdefault(idx, []).append(entry)
-            # Attach to each message
-            for i, msg in enumerate(result["messages"]):
-                msg["attachments"] = by_msg.get(i, [])
-        except Exception:
-            pass
-
-    return result
 
 
 def _get_recent_logs(limit: int = 20) -> list[dict]:
@@ -148,7 +188,7 @@ def _get_recent_logs(limit: int = 20) -> list[dict]:
         return []
 
     log_files = sorted(
-        log_dir.glob("*.log"),
+        log_dir.glob("*.json"),
         key=lambda f: f.stat().st_mtime,
         reverse=True,
     )
@@ -161,6 +201,10 @@ def _get_recent_logs(limit: int = 20) -> list[dict]:
 
     return results
 
+
+# ---------------------------------------------------------------------------
+# Router factory
+# ---------------------------------------------------------------------------
 
 def create_dashboard_router(
     state: DashboardState,
@@ -243,10 +287,15 @@ def create_dashboard_router(
             log["api_key"] = _mask_api_key(log.get("api_key"))
             # Supplement with cached usage if log file didn't have it
             if log.get("input_tokens") is None:
-                usage = state.get_usage(log["request_id"])
-                if usage:
-                    log["input_tokens"] = usage.get("prompt_tokens")
-                    log["output_tokens"] = usage.get("completion_tokens")
+                usage_data = log.get("usage")
+                if usage_data:
+                    log["input_tokens"] = usage_data.get("input_tokens")
+                    log["output_tokens"] = usage_data.get("output_tokens")
+                else:
+                    usage = state.get_usage(log.get("request_id", ""))
+                    if usage:
+                        log["input_tokens"] = usage.get("prompt_tokens")
+                        log["output_tokens"] = usage.get("completion_tokens")
 
         merged = active + completed
         return merged[:limit]
@@ -315,24 +364,26 @@ def create_dashboard_router(
 
         # Fall back to log file
         log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
-        log_path = log_dir / f"{request_id}.log"
+        log_path = log_dir / f"{request_id}.json"
         parsed = _parse_log_file(log_path)
         if parsed is None:
             raise HTTPException(status_code=404, detail="Request not found")
 
+        timing = parsed.get("timing", {})
+        usage = parsed.get("usage", {})
         return templates.TemplateResponse(
             request,
             "detail.html",
             {
-                "request_id": parsed["request_id"],
-                "model": parsed["model"],
+                "request_id": parsed.get("request_id", request_id),
+                "model": parsed.get("model"),
                 "api_key": _mask_api_key(parsed.get("api_key")),
                 "timestamp": parsed.get("timestamp", ""),
-                "duration_ms": parsed.get("duration_ms", 0),
-                "acquire_ms": parsed.get("acquire_ms"),
-                "query_ms": parsed.get("query_ms"),
-                "input_tokens": parsed.get("input_tokens"),
-                "output_tokens": parsed.get("output_tokens"),
+                "duration_ms": timing.get("duration_ms", 0),
+                "acquire_ms": timing.get("acquire_ms"),
+                "query_ms": timing.get("query_ms"),
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
                 "error": parsed.get("error"),
                 "is_active": False,
                 "buffered_text": "",

@@ -29,7 +29,7 @@ from claudebridge.server import (
     ClaudeResponse,
     app,
 )
-from claudebridge.image_utils import extract_text_from_content
+from claudebridge.server import extract_text_from_content
 
 
 @pytest.mark.unit

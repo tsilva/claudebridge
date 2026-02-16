@@ -9,7 +9,7 @@ Usage:
 
 import pytest
 
-from claudebridge.model_mapping import (
+from claudebridge.models import (
     resolve_model,
     UnsupportedModelError,
     SIMPLE_NAMES,

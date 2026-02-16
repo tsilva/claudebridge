@@ -1,16 +1,21 @@
 """FastAPI server exposing Claude Code SDK as OpenAI-compatible API."""
 
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
+import shutil
 import time
 import traceback
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -79,12 +84,361 @@ from .models import (
     ErrorDetail,
     ErrorResponse,
 )
-from .model_mapping import resolve_model, AVAILABLE_MODELS, UnsupportedModelError
+from .models import (
+    resolve_model,
+    AVAILABLE_MODELS,
+    UnsupportedModelError,
+    ContentPart,
+    TextContent,
+    ImageUrlContent,
+)
 from .pool import ClientPool
-from .session_logger import SessionLogger
-from .image_utils import has_multimodal_content, openai_content_to_claude, extract_text_from_content
-from .dashboard_state import DashboardState
+from .dashboard import DashboardState
 from . import __version__
+
+
+# ---------------------------------------------------------------------------
+# Image format conversion utilities (OpenAI → Claude)
+# ---------------------------------------------------------------------------
+
+EXTENSION_MAP = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "application/pdf": ".pdf",
+}
+
+
+@dataclass
+class AttachmentInfo:
+    """Metadata for an attachment extracted from a message."""
+
+    msg_index: int
+    att_index: int
+    media_type: str
+    content_type: str  # "base64" or "url"
+    data: bytes | None  # decoded binary data (base64 only)
+    url: str | None  # original HTTP URL (url only)
+    filename: str  # e.g. "msg0_att0.png"
+
+
+def extract_attachments_from_messages(
+    messages: list,
+) -> list[AttachmentInfo]:
+    """Extract attachment info from multimodal messages."""
+    attachments: list[AttachmentInfo] = []
+
+    for msg_idx, msg in enumerate(messages):
+        if not isinstance(msg.content, list):
+            continue
+
+        att_idx = 0
+        for part in msg.content:
+            if not isinstance(part, ImageUrlContent):
+                continue
+
+            url = part.image_url.url
+
+            if is_data_url(url):
+                media_type, b64_data = parse_data_url(url)
+                ext = EXTENSION_MAP.get(media_type, ".bin")
+                filename = f"msg{msg_idx}_att{att_idx}{ext}"
+                attachments.append(
+                    AttachmentInfo(
+                        msg_index=msg_idx,
+                        att_index=att_idx,
+                        media_type=media_type,
+                        content_type="base64",
+                        data=base64.b64decode(b64_data),
+                        url=None,
+                        filename=filename,
+                    )
+                )
+            elif is_http_url(url):
+                ext = ".png"
+                for mt, e in EXTENSION_MAP.items():
+                    if e[1:] in url.lower():
+                        ext = e
+                        break
+                filename = f"msg{msg_idx}_att{att_idx}{ext}"
+                attachments.append(
+                    AttachmentInfo(
+                        msg_index=msg_idx,
+                        att_index=att_idx,
+                        media_type="image/unknown",
+                        content_type="url",
+                        data=None,
+                        url=url,
+                        filename=filename,
+                    )
+                )
+
+            att_idx += 1
+
+    return attachments
+
+
+def parse_data_url(url: str) -> tuple[str, str]:
+    """Extract media type and base64 data from a data URL."""
+    match = re.match(r"data:([^;]+);base64,(.+)", url)
+    if not match:
+        raise ValueError(f"Invalid data URL format: {url[:50]}...")
+    return match.group(1), match.group(2)
+
+
+def is_http_url(url: str) -> bool:
+    """Check if URL is an HTTP/HTTPS URL."""
+    return url.startswith("http://") or url.startswith("https://")
+
+
+def is_data_url(url: str) -> bool:
+    """Check if URL is a data URL."""
+    return url.startswith("data:")
+
+
+def openai_image_to_claude(image_content: ImageUrlContent) -> dict[str, Any]:
+    """Convert OpenAI image_url content block to Claude image/document format."""
+    url = image_content.image_url.url
+
+    if is_data_url(url):
+        media_type, data = parse_data_url(url)
+        block_type = "document" if media_type == "application/pdf" else "image"
+        return {
+            "type": block_type,
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": data,
+            }
+        }
+
+    if is_http_url(url):
+        return {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": url,
+            }
+        }
+
+    raise ValueError(f"Unsupported image URL format: {url[:50]}...")
+
+
+def openai_content_to_claude(content: str | list[ContentPart]) -> list[dict[str, Any]]:
+    """Convert OpenAI message content to Claude content array format."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+
+    result = []
+    for part in content:
+        if isinstance(part, TextContent):
+            result.append({"type": "text", "text": part.text})
+        elif isinstance(part, ImageUrlContent):
+            result.append(openai_image_to_claude(part))
+
+    return result
+
+
+def has_multimodal_content(messages: list) -> bool:
+    """Check if any message contains image content."""
+    return any(
+        isinstance(part, ImageUrlContent)
+        for msg in messages
+        if isinstance(msg.content, list)
+        for part in msg.content
+    )
+
+
+def extract_text_from_content(content: str | list[ContentPart]) -> str:
+    """Extract text from message content for logging."""
+    if isinstance(content, str):
+        return content
+
+    parts = []
+    for part in content:
+        if isinstance(part, TextContent):
+            parts.append(part.text)
+        elif isinstance(part, ImageUrlContent):
+            url = part.image_url.url
+            if is_data_url(url):
+                media_type, _ = parse_data_url(url)
+                if media_type == "application/pdf":
+                    parts.append("[document: PDF base64 data]")
+                else:
+                    parts.append("[image: base64 data]")
+            else:
+                parts.append(f"[image: {url}]")
+
+    return " ".join(parts)
+
+# ---------------------------------------------------------------------------
+# Session logging (JSON format)
+# ---------------------------------------------------------------------------
+
+# Maximum number of log files to keep
+MAX_LOG_FILES = int(os.environ.get("MAX_LOG_FILES", 1000))
+
+
+class SessionLogger:
+    """Logs a single Claude request/response session to a JSON file."""
+
+    def __init__(self, request_id: str, model: str, api_key: str | None = None):
+        self.request_id = request_id
+        self.model = model
+        self.api_key = api_key
+        self.start_time = datetime.now(timezone.utc)
+        self.chunks: list[tuple[datetime, str]] = []
+        self.finish_reason: str | None = None
+        self.error: str | None = None
+        self.acquire_ms: int | None = None
+        self.query_ms: int | None = None
+        self.pool_snapshot: dict | None = None
+        self.exception_type: str | None = None
+        self.traceback_str: str | None = None
+        self.input_tokens: int | None = None
+        self.output_tokens: int | None = None
+
+        # Ensure log directory exists
+        self.log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.log_dir / f"{request_id}.json"
+
+    def log_chunk(self, content: str) -> None:
+        """Record a streaming chunk with timestamp."""
+        self.chunks.append((datetime.now(timezone.utc), content))
+
+    def log_finish(self, reason: str) -> None:
+        """Record the finish reason."""
+        self.finish_reason = reason
+
+    def log_timing(self, acquire_ms: int, query_ms: int) -> None:
+        """Record timing breakdown."""
+        self.acquire_ms = acquire_ms
+        self.query_ms = query_ms
+
+    def log_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Record token usage."""
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+    def log_error(self, error: str, *, exception_type: str | None = None,
+                  traceback_str: str | None = None, pool_snapshot: dict | None = None) -> None:
+        """Record an error with optional diagnostic details."""
+        self.error = error
+        if exception_type is not None:
+            self.exception_type = exception_type
+        if traceback_str is not None:
+            self.traceback_str = traceback_str
+        if pool_snapshot is not None:
+            self.pool_snapshot = pool_snapshot
+
+    def write(self, messages: list, stream: bool, temperature: float | None, max_tokens: int | None) -> None:
+        """Write the complete session log as JSON."""
+        end_time = datetime.now(timezone.utc)
+        duration_ms = int((end_time - self.start_time).total_seconds() * 1000)
+        full_response = "".join(content for _, content in self.chunks)
+
+        # Format messages for JSON
+        msg_list = []
+        for msg in messages:
+            msg_list.append({
+                "role": msg.role,
+                "content": extract_text_from_content(msg.content),
+            })
+
+        # Build timing dict
+        timing: dict[str, int] = {"duration_ms": duration_ms}
+        if self.acquire_ms is not None:
+            timing["acquire_ms"] = self.acquire_ms
+        if self.query_ms is not None:
+            timing["query_ms"] = self.query_ms
+
+        # Build usage dict
+        usage: dict[str, int] = {}
+        if self.input_tokens is not None:
+            usage["input_tokens"] = self.input_tokens
+        if self.output_tokens is not None:
+            usage["output_tokens"] = self.output_tokens
+
+        # Build attachments metadata
+        att_meta = []
+        try:
+            attachments = extract_attachments_from_messages(messages)
+            for att in attachments:
+                entry = {
+                    "msg_index": att.msg_index,
+                    "att_index": att.att_index,
+                    "media_type": att.media_type,
+                    "filename": att.filename,
+                }
+                att_meta.append(entry)
+        except Exception:
+            pass
+
+        data = {
+            "request_id": self.request_id,
+            "model": self.model,
+            "api_key": self.api_key,
+            "timestamp": self.start_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "messages": msg_list,
+            "parameters": {
+                "stream": stream,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            "response": full_response,
+            "finish_reason": self.finish_reason,
+            "timing": timing,
+            "usage": usage,
+            "error": self.error,
+            "attachments": att_meta,
+        }
+
+        with open(self.log_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        # Save binary attachments
+        self._save_attachments(messages)
+        self._cleanup_old_logs()
+
+    def _save_attachments(self, messages: list) -> None:
+        """Save binary attachments alongside the log file."""
+        try:
+            attachments = extract_attachments_from_messages(messages)
+            if not attachments:
+                return
+
+            att_dir = self.log_dir / f"{self.request_id}_attachments"
+            att_dir.mkdir(parents=True, exist_ok=True)
+
+            for att in attachments:
+                if att.content_type == "base64" and att.data:
+                    (att_dir / att.filename).write_bytes(att.data)
+
+            logging.info(f"[session_logger] Saved {len(attachments)} attachment(s) for {self.request_id}")
+        except Exception as e:
+            logging.warning(f"[session_logger] Failed to save attachments: {e}")
+
+    def _cleanup_old_logs(self) -> None:
+        """Delete oldest log files if count exceeds MAX_LOG_FILES."""
+        try:
+            log_files = sorted(
+                self.log_dir.glob("*.json"),
+                key=lambda f: f.stat().st_mtime,
+            )
+            if len(log_files) > MAX_LOG_FILES:
+                to_delete = log_files[:len(log_files) - MAX_LOG_FILES]
+                for f in to_delete:
+                    stem = f.stem
+                    att_dir = self.log_dir / f"{stem}_attachments"
+                    if att_dir.is_dir():
+                        shutil.rmtree(att_dir)
+                    f.unlink()
+                logging.info(f"[session_logger] Cleaned up {len(to_delete)} old log files")
+        except Exception as e:
+            logging.warning(f"[session_logger] Log cleanup failed: {e}")
+
 
 # Pool configuration
 pool: ClientPool | None = None
@@ -135,7 +489,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Claude Code Bridge", version=__version__, lifespan=lifespan)
 
 # Mount dashboard
-from .dashboard_routes import create_dashboard_router
+from .dashboard import create_dashboard_router
 
 app.include_router(create_dashboard_router(
     dashboard_state,
@@ -448,6 +802,8 @@ async def call_claude_sdk(
     Note: Function calling is emulated by prompting for JSON output since the
     Claude Agent SDK doesn't support custom tool definitions.
     """
+    from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
     resolved_model = resolve_model(model)
     request_id = session_logger.request_id
     dashboard_state.request_started(request_id, model, api_key=session_logger.api_key, messages=messages)
@@ -557,6 +913,8 @@ async def stream_claude_sdk(
     Note: When tools are provided, we buffer the response to parse JSON at the end
     since we're emulating function calling through prompting.
     """
+    from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
     resolved_model = resolve_model(model)
     dashboard_state.request_started(request_id, model, api_key=session_logger.api_key, messages=messages)
     created = int(time.time())
