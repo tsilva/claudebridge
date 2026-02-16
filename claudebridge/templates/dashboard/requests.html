@@ -2,7 +2,7 @@
 {% if requests %}
 {% for req in requests %}
 <div class="request-row{% if req.is_active %} request-row-active{% endif %}" data-request-id="{{ req.request_id }}" hx-get="/dashboard/request/{{ req.request_id }}" hx-target="#detail" hx-swap="innerHTML">
-    <span>{{ req.request_id[-8:] }}
+    <span><span class="status-dot {% if req.is_active %}streaming{% elif req.error %}error{% else %}idle{% endif %}"></span>{{ req.request_id[-8:] }}
         {% if req.is_active %}
         {% if req.api_key and req.api_key != "anonymous" %}
         <span class="badge badge-key">{{ req.api_key }}</span>
