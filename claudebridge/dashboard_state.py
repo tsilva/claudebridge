@@ -7,15 +7,17 @@ import time
 class _ActiveRequest:
     """Tracks a single in-flight request."""
 
-    __slots__ = ("request_id", "model", "api_key", "start_time", "status", "chunks_received", "_subscribers")
+    __slots__ = ("request_id", "model", "api_key", "start_time", "status", "chunks_received", "messages", "buffered_text", "_subscribers")
 
-    def __init__(self, request_id: str, model: str, api_key: str | None = None):
+    def __init__(self, request_id: str, model: str, api_key: str | None = None, messages: list[dict] | None = None):
         self.request_id = request_id
         self.model = model
         self.api_key = api_key
         self.start_time = time.monotonic()
         self.status = "active"
         self.chunks_received = 0
+        self.messages = messages or []
+        self.buffered_text = ""
         self._subscribers: list[asyncio.Queue] = []
 
     def to_dict(self) -> dict:
@@ -26,6 +28,8 @@ class _ActiveRequest:
             "elapsed_s": round(time.monotonic() - self.start_time, 2),
             "status": self.status,
             "chunks_received": self.chunks_received,
+            "messages": self.messages,
+            "buffered_text": self.buffered_text,
         }
 
 
@@ -66,8 +70,8 @@ class DashboardState:
             pass
         self._change_event.clear()
 
-    def request_started(self, request_id: str, model: str, api_key: str | None = None) -> None:
-        self._active[request_id] = _ActiveRequest(request_id, model, api_key=api_key)
+    def request_started(self, request_id: str, model: str, api_key: str | None = None, messages: list[dict] | None = None) -> None:
+        self._active[request_id] = _ActiveRequest(request_id, model, api_key=api_key, messages=messages)
         self._notify()
 
     def chunk_received(self, request_id: str, text: str) -> None:
@@ -75,6 +79,7 @@ class DashboardState:
         if req is None:
             return
         req.chunks_received += 1
+        req.buffered_text += text
         msg = {"type": "chunk", "text": text}
         for q in req._subscribers:
             q.put_nowait(msg)

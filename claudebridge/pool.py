@@ -101,7 +101,7 @@ class ClientPool:
         """Disconnect client and remove from tracking."""
         try:
             await client.disconnect()
-        except Exception:
+        except BaseException:
             pass
         self._client_models.pop(client, None)
 
@@ -110,13 +110,6 @@ class ClientPool:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
-
-    async def _disconnect_client_background(self, client: ClaudeSDKClient) -> None:
-        """Disconnect client in background, logging errors."""
-        try:
-            await self._disconnect_client(client)
-        except Exception as e:
-            logger.warning(f"[pool] Background disconnect failed: {e}")
 
     def _log_tag(self, request_id: str | None = None) -> str:
         """Return log prefix with optional request ID."""
@@ -190,6 +183,7 @@ class ClientPool:
             )
 
         client: ClaudeSDKClient | None = None
+        old_to_discard: ClaudeSDKClient | None = None
         completed = False
 
         try:
@@ -201,15 +195,18 @@ class ClientPool:
                     self._available.remove(client)
                     logger.info(f"{tag} Using pre-warmed {model} client")
                 elif self._available:
-                    # Discard non-matching pre-warmed client
-                    old = self._available.pop(0)
-                    old_model = self._client_models.get(old, "unknown")
-                    logger.info(f"{tag} Discarding pre-warmed {old_model} client, need {model}")
-                    self._spawn_background(self._disconnect_client_background(old))
+                    # Save reference for inline disconnect after releasing the lock
+                    old_to_discard = self._available.pop(0)
 
                 self._in_use += 1
                 self._log_status("Acquired", request_id)
                 self._fire_change()
+
+            # Disconnect non-matching pre-warmed client outside the lock
+            if old_to_discard:
+                old_model = self._client_models.get(old_to_discard, "unknown")
+                logger.info(f"{tag} Discarding pre-warmed {old_model} client, need {model}")
+                await self._disconnect_client(old_to_discard)
 
             # Create fresh if no pre-warmed client was available
             if client is None:
@@ -226,9 +223,9 @@ class ClientPool:
                 self._fire_change()
             # ALWAYS destroy after use — never return to pool
             if client is not None:
-                self._spawn_background(self._disconnect_client_background(client))
                 status = "after use" if completed else "after cancellation"
                 logger.info(f"{tag} Destroyed {model} client {status}")
+                await self._disconnect_client(client)
             # Pre-warm a replacement
             self._spawn_background(self._prewarm_client(model))
             self._semaphore.release()

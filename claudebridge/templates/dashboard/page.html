@@ -23,7 +23,8 @@
         .badge-ok { background: #2d6a4f; color: #b7e4c7; }
         .badge-err { background: #9d0208; color: #ffd7d7; }
         .badge-active { background: #1d3557; color: #a8dadc; }
-        .badge-key { background: #3d3d3d; color: #aaa; font-family: monospace; font-size: 0.7rem; }
+        .badge-key { background: #1a3a5c; color: #7eb8e0; font-family: monospace; font-size: 0.75rem; font-weight: 600; }
+        .badge-model { background: #2a2a2a; color: #888; font-size: 0.7rem; }
         .detail-panel { overflow-y: auto; }
         .detail-panel pre { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; max-height: 60vh; overflow-y: auto; }
         .pool-bar { display: flex; gap: 0.3rem; align-items: center; }
@@ -45,6 +46,15 @@
         .attachment-link { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.4rem 0.7rem; border-radius: 4px; background: var(--pico-muted-border-color); font-size: 0.8rem; text-decoration: none; color: inherit; }
         .attachment-link:hover { opacity: 0.8; }
         .attachment-icon { font-size: 1.2rem; }
+        /* JSON syntax highlighting — Catppuccin Mocha palette */
+        pre.json-hl { background: rgba(30, 30, 46, 0.5); border-radius: 4px; padding: 0.6rem; }
+        .json-key { color: #89b4fa; }
+        .json-string { color: #a6e3a1; }
+        .json-number { color: #fab387; }
+        .json-bool { color: #cba6f7; }
+        .json-null { color: #6c7086; }
+        .json-brace { color: #cdd6f4; }
+        .json-colon { color: #6c7086; }
     </style>
 </head>
 <body>
@@ -99,6 +109,86 @@
                     }
                     applyFilter();
                 });
+            });
+        })();
+    </script>
+    <script>
+        (function() {
+            function escapeHtml(s) {
+                return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            }
+
+            function highlightJson(jsonStr) {
+                try {
+                    var obj = JSON.parse(jsonStr);
+                    var pretty = JSON.stringify(obj, null, 2);
+                } catch (e) { return null; }
+                return pretty.replace(/("(?:\\.|[^"\\])*")\s*:/g, function(m, key) {
+                    return '<span class="json-key">' + escapeHtml(key) + '</span><span class="json-colon">:</span>';
+                }).replace(/"(?:\\.|[^"\\])*"/g, function(m) {
+                    return '<span class="json-string">' + escapeHtml(m) + '</span>';
+                }).replace(/\b(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g, '<span class="json-number">$1</span>')
+                  .replace(/\b(true|false)\b/g, '<span class="json-bool">$1</span>')
+                  .replace(/\bnull\b/g, '<span class="json-null">null</span>')
+                  .replace(/([{}\[\]])/g, '<span class="json-brace">$1</span>')
+                  .replace(/,\s*$/gm, '<span class="json-colon">,</span>');
+            }
+
+            function processPreElement(pre) {
+                if (pre.classList.contains('json-hl')) return;
+                var text = pre.textContent;
+
+                // Check for ```json fenced blocks
+                var fenceRe = /```json\s*\n([\s\S]*?)```/g;
+                var match = fenceRe.exec(text);
+                if (match) {
+                    var parts = [];
+                    var lastIndex = 0;
+                    fenceRe.lastIndex = 0;
+                    while ((match = fenceRe.exec(text)) !== null) {
+                        if (match.index > lastIndex) {
+                            parts.push(escapeHtml(text.slice(lastIndex, match.index)));
+                        }
+                        var hl = highlightJson(match[1].trim());
+                        if (hl) {
+                            parts.push(hl);
+                        } else {
+                            parts.push(escapeHtml(match[0]));
+                        }
+                        lastIndex = fenceRe.lastIndex;
+                    }
+                    if (lastIndex < text.length) {
+                        parts.push(escapeHtml(text.slice(lastIndex)));
+                    }
+                    if (parts.length) {
+                        pre.innerHTML = parts.join('');
+                        pre.classList.add('json-hl');
+                        return;
+                    }
+                }
+
+                // Fallback: entire content is JSON object/array
+                var trimmed = text.trim();
+                if ((trimmed[0] === '{' || trimmed[0] === '[') && (trimmed[trimmed.length - 1] === '}' || trimmed[trimmed.length - 1] === ']')) {
+                    var hl = highlightJson(trimmed);
+                    if (hl) {
+                        pre.innerHTML = hl;
+                        pre.classList.add('json-hl');
+                    }
+                }
+            }
+
+            function highlightAllJson(root) {
+                var pres = (root || document.getElementById('detail')).querySelectorAll('pre');
+                for (var i = 0; i < pres.length; i++) {
+                    processPreElement(pres[i]);
+                }
+            }
+
+            document.body.addEventListener('htmx:afterSettle', function(e) {
+                if (e.detail.target && e.detail.target.id === 'detail') {
+                    highlightAllJson();
+                }
             });
         })();
     </script>

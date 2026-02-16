@@ -428,6 +428,7 @@ async def call_claude_sdk(
     model: str,
     session_logger: SessionLogger,
     tools: list[Tool] | None = None,
+    messages: list[dict] | None = None,
 ) -> ClaudeResponse:
     """Call Claude Code SDK using pooled client and return response.
 
@@ -449,7 +450,7 @@ async def call_claude_sdk(
     """
     resolved_model = resolve_model(model)
     request_id = session_logger.request_id
-    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key)
+    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key, messages=messages)
 
     # Add tool prompt if tools are provided
     effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
@@ -538,6 +539,7 @@ async def stream_claude_sdk(
     request_id: str,
     session_logger: SessionLogger,
     tools: list[Tool] | None = None,
+    messages: list[dict] | None = None,
 ):
     """Stream Claude Code SDK response as SSE chunks using pooled client.
 
@@ -556,7 +558,7 @@ async def stream_claude_sdk(
     since we're emulating function calling through prompting.
     """
     resolved_model = resolve_model(model)
-    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key)
+    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key, messages=messages)
     created = int(time.time())
     start_time = time.monotonic()
     finish_reason = "stop"
@@ -733,12 +735,14 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     api_key = auth.removeprefix("Bearer ").strip() or None if auth else None
     prompt = format_messages(request.messages)
     session_logger = SessionLogger(request_id, request.model, api_key=api_key)
+    # Serialize messages for dashboard display
+    dash_messages = [{"role": m.role, "content": m.content if isinstance(m.content, str) else str(m.content)} for m in request.messages]
 
     if request.stream:
         async def stream_with_logging():
             try:
                 async for chunk in stream_claude_sdk(
-                    prompt, request.model, request_id, session_logger, request.tools
+                    prompt, request.model, request_id, session_logger, request.tools, messages=dash_messages
                 ):
                     yield chunk
             finally:
@@ -750,7 +754,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         )
 
     try:
-        response = await call_claude_sdk(prompt, request.model, session_logger, request.tools)
+        response = await call_claude_sdk(prompt, request.model, session_logger, request.tools, messages=dash_messages)
     finally:
         session_logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
 

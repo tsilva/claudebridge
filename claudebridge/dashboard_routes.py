@@ -307,8 +307,8 @@ def create_dashboard_router(
                     "output_tokens": None,
                     "error": None,
                     "is_active": True,
-                    "buffered_text": "",
-                    "messages": [],
+                    "buffered_text": active.get("buffered_text", ""),
+                    "messages": active.get("messages", []),
                     "response": None,
                 },
             )
