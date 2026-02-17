@@ -35,6 +35,7 @@ claudebridge connects them — no API keys, no extra costs.
 - **Streaming support** — Real-time SSE responses matching OpenAI format
 - **Connection pooling** — Pre-spawned clients for reduced latency
 - **Session logging** — Full request/response logging for debugging
+- **Pure chat mode** — Tools, plugins, and MCP servers are disabled; Claude operates as a conversational assistant fully isolated from your local Claude Code environment
 
 ## Quick Start
 
