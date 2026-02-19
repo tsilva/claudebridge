@@ -9,6 +9,7 @@ import re
 import shutil
 import time
 import traceback
+import urllib.parse
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -157,8 +158,9 @@ def extract_attachments_from_messages(
                 )
             elif is_http_url(url):
                 ext = ".png"
+                parsed_path = urllib.parse.urlparse(url).path.lower()
                 for mt, e in EXTENSION_MAP.items():
-                    if e[1:] in url.lower():
+                    if parsed_path.endswith(e):
                         ext = e
                         break
                 filename = f"msg{msg_idx}_att{att_idx}{ext}"
@@ -396,18 +398,18 @@ class SessionLogger:
             "attachments": att_meta,
         }
 
-        with open(self.log_path, "w") as f:
-            json.dump(data, f, indent=2)
+        def _do_write() -> None:
+            with open(self.log_path, "w") as f:
+                json.dump(data, f, indent=2)
+            self._save_attachments(messages)
+            self._cleanup_old_logs()
 
-        # Save binary attachments
-        self._save_attachments(messages)
-        # Run O(n) cleanup off the event loop when called from async context
         try:
             loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, self._cleanup_old_logs)
+            loop.run_in_executor(None, _do_write)
         except RuntimeError:
             # No running event loop (e.g. tests) — run synchronously
-            self._cleanup_old_logs()
+            _do_write()
 
     def _save_attachments(self, messages: list) -> None:
         """Save binary attachments alongside the log file."""
@@ -604,6 +606,9 @@ def format_messages(messages: list[Message]) -> str | list[dict]:
             # Skip empty assistant messages (e.g., tool call only)
             if content:
                 parts.append(f"Assistant: {content}")
+        elif msg.role == "tool":
+            name = getattr(msg, "name", None) or "tool"
+            parts.append(f"Tool ({name}): {content}")
 
     prompt = "\n\n".join(parts)
     if system_prompt:
@@ -626,6 +631,10 @@ def format_multimodal_messages(messages: list[Message]) -> list[dict]:
             continue
         if msg.role == "system":
             system_prompt = extract_text_from_content(msg.content)
+        elif msg.role == "tool":
+            name = getattr(msg, "name", None) or "tool"
+            text = extract_text_from_content(msg.content)
+            content_blocks.append({"type": "text", "text": f"Tool ({name}): {text}"})
         else:
             # Build content for user/assistant messages
             role_prefix = "User" if msg.role == "user" else "Assistant"
@@ -1107,7 +1116,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
 
     request_id = f"chatcmpl-{uuid4().hex[:12]}"
     auth = http_request.headers.get("authorization", "")
-    api_key = auth.removeprefix("Bearer ").strip() or None if auth else None
+    api_key = (auth.removeprefix("Bearer ").strip() or None) if auth else None
     prompt = format_messages(request.messages)
     session_logger = SessionLogger(request_id, request.model, api_key=api_key)
     # Serialize messages for dashboard display

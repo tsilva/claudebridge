@@ -9,8 +9,6 @@ from pathlib import Path
 
 import httpx
 
-from claudebridge.client import BridgeClient
-
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 IMAGE_PATH = FIXTURES_DIR / "ocr_test_document.png"
 
@@ -37,8 +35,29 @@ def load_image_data_url() -> str:
     return f"data:image/png;base64,{b64}"
 
 
+async def complete_messages(
+    client: httpx.AsyncClient,
+    base_url: str,
+    messages: list[dict],
+    model: str,
+    stream: bool,
+) -> None:
+    """Send a chat completion request using httpx.AsyncClient."""
+    payload = {"model": model, "messages": messages, "stream": stream}
+    endpoint = base_url.rstrip("/") + "/v1/chat/completions"
+    if stream:
+        async with client.stream("POST", endpoint, json=payload) as resp:
+            resp.raise_for_status()
+            async for _ in resp.aiter_lines():
+                pass
+    else:
+        resp = await client.post(endpoint, json=payload)
+        resp.raise_for_status()
+
+
 async def run_request(
-    client: BridgeClient,
+    client: httpx.AsyncClient,
+    base_url: str,
     index: int,
     total: int,
     kind: str,
@@ -53,7 +72,7 @@ async def run_request(
 
     t0 = time.monotonic()
     try:
-        await client.complete_messages(messages, model=model, stream=stream)
+        await complete_messages(client, base_url, messages, model=model, stream=stream)
         elapsed = time.monotonic() - t0
         print(f"{tag} DONE   {kind:<12} {mode:<10} {model}  {elapsed:.1f}s")
         return {"index": index, "kind": kind, "model": model, "stream": stream, "elapsed": elapsed, "status": "ok"}
@@ -77,7 +96,7 @@ async def main(count: int, models: list[str], url: str) -> None:
         print(f"Error: server not reachable at {server_root}")
         return
 
-    async with BridgeClient(base_url=url, model=models[0]) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         print(f"Sending {count} requests to {url} (models={', '.join(models)})\n")
 
         tasks = []
@@ -106,7 +125,7 @@ async def main(count: int, models: list[str], url: str) -> None:
 
             async def launch(idx=i, k=kind, m=messages, s=stream, mdl=model):
                 await asyncio.sleep(idx * 0.2)
-                return await run_request(client, idx, count, k, m, s, model=mdl)
+                return await run_request(client, url, idx, count, k, m, s, model=mdl)
 
             tasks.append(asyncio.create_task(launch()))
 

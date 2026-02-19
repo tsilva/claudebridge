@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -60,7 +61,7 @@ class DashboardState:
         self._change_event = asyncio.Event()
         self._pool_change_event = asyncio.Event()
         self._recent_usage: dict[str, dict[str, int]] = {}
-        self._recent_order: list[str] = []
+        self._recent_order: deque[str] = deque()
 
     def _notify(self) -> None:
         """Signal that the active requests list has changed."""
@@ -98,7 +99,10 @@ class DashboardState:
         req.buffered_text += text
         msg = {"type": "chunk", "text": text}
         for q in req._subscribers:
-            q.put_nowait(msg)
+            try:
+                q.put_nowait(msg)
+            except asyncio.QueueFull:
+                pass  # Drop for slow consumers
 
     def request_completed(self, request_id: str, usage: dict | None = None) -> None:
         req = self._active.pop(request_id, None)
@@ -109,10 +113,13 @@ class DashboardState:
             self._recent_order.append(request_id)
             # Evict old entries
             while len(self._recent_order) > self._RECENT_LIMIT:
-                old_id = self._recent_order.pop(0)
+                old_id = self._recent_order.popleft()
                 self._recent_usage.pop(old_id, None)
         for q in req._subscribers:
-            q.put_nowait({"type": "done"})
+            try:
+                q.put_nowait({"type": "done"})
+            except asyncio.QueueFull:
+                pass  # Drop for slow consumers
         self._notify()
 
     def get_usage(self, request_id: str) -> dict[str, int] | None:
@@ -124,7 +131,10 @@ class DashboardState:
         if req is None:
             return
         for q in req._subscribers:
-            q.put_nowait({"type": "error", "error": error})
+            try:
+                q.put_nowait({"type": "error", "error": error})
+            except asyncio.QueueFull:
+                pass  # Drop for slow consumers
         self._notify()
 
     def get_active_requests(self) -> list[dict]:
@@ -134,7 +144,7 @@ class DashboardState:
         req = self._active.get(request_id)
         if req is None:
             return None
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=100)
         req._subscribers.append(q)
         return q
 
@@ -396,7 +406,7 @@ def create_dashboard_router(
     async def dashboard_attachment(request_id: str, filename: str):
         """Serve a saved attachment file."""
         # Validate request_id format
-        if not re.fullmatch(r"chatcmpl-[a-f0-9]+", request_id):
+        if not re.fullmatch(r"chatcmpl-[a-f0-9]{8,32}", request_id):
             raise HTTPException(status_code=400, detail="Invalid request ID")
         # Validate filename — no path traversal
         if ".." in filename or "/" in filename or "\\" in filename:

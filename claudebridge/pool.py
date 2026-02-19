@@ -95,7 +95,14 @@ class ClientPool:
         from claude_agent_sdk import ClaudeSDKClient
 
         client = ClaudeSDKClient(make_options(model))
-        await client.connect()
+        try:
+            await asyncio.wait_for(client.connect(), timeout=30)
+        except asyncio.TimeoutError:
+            try:
+                await client.disconnect()
+            except BaseException:
+                pass
+            raise
         self._client_models[client] = model
         return client
 
@@ -236,6 +243,11 @@ class ClientPool:
     async def _prewarm_client(self, model: str) -> None:
         """Create a fresh client and add to available pool for next request."""
         try:
+            # Pre-check capacity before creating client to avoid unnecessary work
+            async with self._lock:
+                if len(self._available) + self._in_use >= self.size:
+                    return
+
             client = await self._create_client(model)
             async with self._lock:
                 if len(self._available) + self._in_use < self.size:
@@ -306,8 +318,9 @@ class ClientPool:
 
         # Wait for in-flight background tasks (disconnects, pre-warms)
         if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            self._background_tasks.clear()
+            snapshot = set(self._background_tasks)
+            await asyncio.gather(*snapshot, return_exceptions=True)
+            self._background_tasks -= snapshot
 
         for client in list(self._client_models.keys()):
             await self._disconnect_client(client)
