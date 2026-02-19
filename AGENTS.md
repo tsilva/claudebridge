@@ -38,12 +38,11 @@ Unsupported model IDs return HTTP 400 with an error message listing valid option
 
 ```
 claudebridge/
-├── server.py         # FastAPI app, endpoints, Claude SDK integration
+├── server.py         # FastAPI app, endpoints, Claude SDK integration, model mapping, session logging
 ├── pool.py           # Dynamic client pool with model replacement
-├── models.py         # Pydantic models for OpenAI request/response format
-├── model_mapping.py  # OpenRouter slug to Claude Code model resolution
-├── client.py         # CLI client
-└── session_logger.py # Request/response logging
+├── models.py         # Pydantic models for OpenAI request/response format and model mapping
+├── dashboard.py      # Real-time dashboard with SSE for pool/request monitoring
+└── __init__.py       # Package version
 ```
 
 ## Key Implementation Details
