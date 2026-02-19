@@ -45,6 +45,9 @@ logs/
 *.log
 # >>> END MANAGED <<<
 
+# Worktrees
+.worktrees/
+
 # Project-specific rules
 *$py.class
 .claude/settings.local.json
