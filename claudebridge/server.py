@@ -231,7 +231,8 @@ def parse_data_url(url: str) -> tuple[str, str]:
     """Extract media type and base64 data from a data URL."""
     match = re.match(r"data:([^;]+);base64,(.+)", url)
     if not match:
-        raise ValueError(f"Invalid data URL format: {url[:50]}...")
+        truncated = url[:50] + ("..." if len(url) > 50 else "")
+        raise ValueError(f"Invalid data URL format: {truncated}")
     return match.group(1), match.group(2)
 
 
@@ -433,6 +434,9 @@ class SessionLogger:
             "timing": timing,
             "usage": usage,
             "error": self.error,
+            "exception_type": self.exception_type,
+            "traceback": self.traceback_str,
+            "pool_snapshot": self.pool_snapshot,
             "attachments": att_meta,
         }
 
@@ -476,9 +480,15 @@ class SessionLogger:
     def _cleanup_old_logs(self) -> None:
         """Delete oldest log files if count exceeds MAX_LOG_FILES."""
         try:
+            def _mtime(f: Path) -> float:
+                try:
+                    return f.stat().st_mtime
+                except OSError:
+                    return 0.0
+
             log_files = sorted(
                 self.log_dir.glob("*.json"),
-                key=lambda f: f.stat().st_mtime,
+                key=_mtime,
             )
             if len(log_files) > MAX_LOG_FILES:
                 to_delete = log_files[:len(log_files) - MAX_LOG_FILES]
@@ -486,8 +496,8 @@ class SessionLogger:
                     stem = f.stem
                     att_dir = self.log_dir / f"{stem}_attachments"
                     if att_dir.is_dir():
-                        shutil.rmtree(att_dir)
-                    f.unlink()
+                        shutil.rmtree(att_dir, ignore_errors=True)
+                    f.unlink(missing_ok=True)
                 logging.info(f"[session_logger] Cleaned up {len(to_delete)} old log files")
         except Exception as e:
             logging.warning(f"[session_logger] Log cleanup failed: {e}")
@@ -895,12 +905,17 @@ async def call_claude_sdk(
     # Add tool prompt if tools are provided
     effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
 
+    # Capture timing in outer scope so timeout handler can record partial data
+    _acquire_ms: int | None = None
+    _query_start: float | None = None
+
     async def _query():
+        nonlocal _acquire_ms, _query_start
         response = ClaudeResponse()
         acquire_start = time.monotonic()
         async with pool.acquire(resolved_model, request_id=request_id) as client:
-            acquire_ms = int((time.monotonic() - acquire_start) * 1000)
-            query_start = time.monotonic()
+            _acquire_ms = int((time.monotonic() - acquire_start) * 1000)
+            _query_start = time.monotonic()
             await send_query(client, effective_prompt)
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
@@ -917,8 +932,8 @@ async def call_claude_sdk(
                             msg.usage.get("output_tokens", 0),
                         )
                     break
-            query_ms = int((time.monotonic() - query_start) * 1000)
-            session_logger.log_timing(acquire_ms, query_ms)
+            query_ms = int((time.monotonic() - _query_start) * 1000)
+            session_logger.log_timing(_acquire_ms, query_ms)
         return response
 
     try:
@@ -944,6 +959,9 @@ async def call_claude_sdk(
     except asyncio.TimeoutError:
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
+        # Record partial timing if acquire completed before timeout fired
+        if _acquire_ms is not None and _query_start is not None and session_logger.acquire_ms is None:
+            session_logger.log_timing(_acquire_ms, int((time.monotonic() - _query_start) * 1000))
         session_logger.log_error(
             f"Timeout after {CLAUDE_TIMEOUT}s",
             exception_type="TimeoutError",
@@ -1026,6 +1044,9 @@ async def stream_claude_sdk(
     # Buffer for tool response parsing
     full_text = ""
     stream_usage: Usage | None = None
+    # Pre-declare timing vars so timeout handler can record partial data
+    acquire_ms: int | None = None
+    query_start: float | None = None
 
     try:
         acquire_start = time.monotonic()
@@ -1118,6 +1139,9 @@ async def stream_claude_sdk(
     except asyncio.TimeoutError:
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
+        # Record partial timing if acquire completed before timeout fired
+        if session_logger.acquire_ms is None and acquire_ms is not None and query_start is not None:
+            session_logger.log_timing(acquire_ms, int((time.monotonic() - query_start) * 1000))
         session_logger.log_error(
             f"Timeout after {CLAUDE_TIMEOUT}s",
             exception_type="TimeoutError",

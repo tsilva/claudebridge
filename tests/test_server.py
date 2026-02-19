@@ -436,20 +436,20 @@ class TestChatCompletionsValidation:
     """Tests for /api/v1/chat/completions request validation."""
 
     def test_missing_model_error(self, test_client):
-        """Missing model returns error."""
+        """Missing model returns 400 error (custom validation error handler)."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={"messages": [{"role": "user", "content": "Hi"}]},
         )
-        assert response.status_code == 422  # Pydantic validation error
+        assert response.status_code == 400  # Custom handler converts 422 → 400
 
     def test_missing_messages_error(self, test_client):
-        """Missing messages returns error."""
+        """Missing messages returns 400 error (custom validation error handler)."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={"model": "sonnet"},
         )
-        assert response.status_code == 422
+        assert response.status_code == 400  # Custom handler converts 422 → 400
 
     def test_invalid_model_error(self, test_client):
         """Invalid model returns OpenAI-format error."""

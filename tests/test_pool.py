@@ -107,7 +107,7 @@ class TestClientPoolInitialize:
         """Initialize creates correct number of clients."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_instance = AsyncMock()
             MockClient.return_value = mock_instance
 
@@ -125,7 +125,7 @@ class TestClientPoolInitialize:
         """Initialize sets model for all clients."""
         pool = ClientPool(size=2, default_model="sonnet")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_instance = AsyncMock()
             MockClient.return_value = mock_instance
 
@@ -140,7 +140,7 @@ class TestClientPoolInitialize:
         """Double initialization is a no-op."""
         pool = ClientPool(size=2)
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_instance = AsyncMock()
             MockClient.return_value = mock_instance
 
@@ -162,7 +162,7 @@ class TestClientPoolAcquire:
         """Acquire returns a pre-warmed client for matching model."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
             # init client, then prewarm client
             mock_prewarm = _make_mock_client()
@@ -182,7 +182,7 @@ class TestClientPoolAcquire:
         """Acquire with different model discards pre-warmed client."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_opus = _make_mock_client()
             mock_sonnet = _make_mock_client()
             mock_prewarm = _make_mock_client()
@@ -203,7 +203,7 @@ class TestClientPoolAcquire:
         """Client is destroyed (not returned) after use."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
             mock_prewarm = _make_mock_client()
             MockClient.side_effect = [mock_client, mock_prewarm]
@@ -225,7 +225,7 @@ class TestClientPoolAcquire:
         """Acquire triggers background pre-warm after use."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_clients = [_make_mock_client() for _ in range(4)]
             MockClient.side_effect = mock_clients
 
@@ -246,7 +246,7 @@ class TestClientPoolAcquire:
         """Sequential requests get different client instances (no reuse)."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             clients = [_make_mock_client() for _ in range(4)]
             MockClient.side_effect = clients
 
@@ -274,8 +274,8 @@ class TestClientPoolAcquire:
         """Concurrent acquisitions limited by pool size."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
-            MockClient.return_value = _make_mock_client()
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
+            MockClient.side_effect = lambda *a, **kw: _make_mock_client()
 
             await pool.initialize()
 
@@ -309,7 +309,7 @@ class TestClientPoolAcquire:
         pool = ClientPool(size=1, default_model="opus")
         pool._acquire_timeout = 0.1  # Very short timeout
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
             MockClient.return_value = mock_client
 
@@ -336,9 +336,8 @@ class TestClientPoolPrewarm:
         """Pre-warm adds client to available list."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
-            mock_client = _make_mock_client()
-            MockClient.return_value = mock_client
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
+            MockClient.side_effect = lambda *a, **kw: _make_mock_client()
 
             await pool.initialize()
 
@@ -360,7 +359,7 @@ class TestClientPoolPrewarm:
         """Pre-warm doesn't grow pool beyond size."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             MockClient.return_value = _make_mock_client()
 
             # Manually add a client
@@ -384,7 +383,7 @@ class TestClientPoolShutdown:
         """Shutdown disconnects all clients."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_clients = [_make_mock_client() for _ in range(2)]
             MockClient.side_effect = mock_clients
 
@@ -402,7 +401,7 @@ class TestClientPoolShutdown:
         """Shutdown clears all pool state."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
             mock_prewarm = _make_mock_client()
             MockClient.side_effect = [mock_client, mock_prewarm]
@@ -422,7 +421,7 @@ class TestClientPoolShutdown:
         """Shutdown cancels the periodic health check task."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
             MockClient.return_value = mock_client
 
@@ -442,7 +441,7 @@ class TestClientPoolModelTracking:
         """Each client tracks its model."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_clients = [_make_mock_client() for _ in range(2)]
             MockClient.side_effect = mock_clients
 
@@ -463,7 +462,7 @@ class TestClientPoolStatus:
         """Status returns pool size, available, in_use, and models."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_clients = [_make_mock_client() for _ in range(2)]
             MockClient.side_effect = mock_clients
 
@@ -481,7 +480,7 @@ class TestClientPoolStatus:
         """Status reflects in-use clients during acquire."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_clients = [_make_mock_client() for _ in range(3)]
             MockClient.side_effect = mock_clients
 
@@ -504,7 +503,7 @@ class TestClientPoolSnapshot:
         """Snapshot returns size, in_use, available, available_models, all_models."""
         pool = ClientPool(size=2, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_clients = [_make_mock_client() for _ in range(3)]
             MockClient.side_effect = mock_clients
 
@@ -531,7 +530,7 @@ class TestClientPoolRequestIdLogging:
         """Acquire logs include request ID when provided."""
         pool = ClientPool(size=1, default_model="opus")
 
-        with patch("claudebridge.pool.ClaudeSDKClient") as MockClient:
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
             mock_prewarm = _make_mock_client()
             MockClient.side_effect = [mock_client, mock_prewarm]

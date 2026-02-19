@@ -236,7 +236,7 @@ def _make_app(state=None, pool_status_fn=None):
 
 
 SAMPLE_LOG = {
-    "request_id": "chatcmpl-abc123",
+    "request_id": "chatcmpl-00abc123",
     "model": "sonnet",
     "api_key": None,
     "timestamp": "2026-02-14T10:00:00.000Z",
@@ -254,7 +254,7 @@ SAMPLE_LOG = {
 }
 
 SAMPLE_LOG_WITH_ERROR = {
-    "request_id": "chatcmpl-err456",
+    "request_id": "chatcmpl-e0000456",
     "model": "opus",
     "api_key": None,
     "timestamp": "2026-02-14T10:05:00.000Z",
@@ -275,12 +275,12 @@ class TestParseLogFile:
 
     def test_parses_valid_log(self, tmp_path):
         """Parses JSON log file with all expected fields."""
-        log_path = tmp_path / "chatcmpl-abc123.json"
+        log_path = tmp_path / "chatcmpl-00abc123.json"
         log_path.write_text(json.dumps(SAMPLE_LOG))
 
         result = _parse_log_file(log_path)
         assert result is not None
-        assert result["request_id"] == "chatcmpl-abc123"
+        assert result["request_id"] == "chatcmpl-00abc123"
         assert result["model"] == "sonnet"
         assert result["timestamp"] == "2026-02-14T10:00:00.000Z"
         assert result["timing"]["duration_ms"] == 1100
@@ -292,12 +292,12 @@ class TestParseLogFile:
 
     def test_parses_error_log(self, tmp_path):
         """Parses log file with error."""
-        log_path = tmp_path / "chatcmpl-err456.json"
+        log_path = tmp_path / "chatcmpl-e0000456.json"
         log_path.write_text(json.dumps(SAMPLE_LOG_WITH_ERROR))
 
         result = _parse_log_file(log_path)
         assert result is not None
-        assert result["request_id"] == "chatcmpl-err456"
+        assert result["request_id"] == "chatcmpl-e0000456"
         assert result["error"] == "Timeout after 120s"
 
     def test_returns_none_for_missing_file(self, tmp_path):
@@ -327,13 +327,13 @@ class TestGetRecentLogs:
         """Returns logs sorted by mtime, newest first."""
         monkeypatch.setenv("LOG_DIR", str(tmp_path))
 
-        older = {**SAMPLE_LOG, "request_id": "chatcmpl-older"}
-        newer = {**SAMPLE_LOG, "request_id": "chatcmpl-newer"}
+        older = {**SAMPLE_LOG, "request_id": "chatcmpl-01de7001"}
+        newer = {**SAMPLE_LOG, "request_id": "chatcmpl-0e0e7001"}
 
-        p1 = tmp_path / "chatcmpl-older.json"
+        p1 = tmp_path / "chatcmpl-01de7001.json"
         p1.write_text(json.dumps(older))
 
-        p2 = tmp_path / "chatcmpl-newer.json"
+        p2 = tmp_path / "chatcmpl-0e0e7001.json"
         p2.write_text(json.dumps(newer))
 
         # Ensure different mtimes
@@ -342,16 +342,16 @@ class TestGetRecentLogs:
 
         result = _get_recent_logs(limit=10)
         assert len(result) == 2
-        assert result[0]["request_id"] == "chatcmpl-newer"
-        assert result[1]["request_id"] == "chatcmpl-older"
+        assert result[0]["request_id"] == "chatcmpl-0e0e7001"
+        assert result[1]["request_id"] == "chatcmpl-01de7001"
 
     def test_respects_limit(self, tmp_path, monkeypatch):
         """Respects the limit parameter."""
         monkeypatch.setenv("LOG_DIR", str(tmp_path))
 
         for i in range(5):
-            log = {**SAMPLE_LOG, "request_id": f"chatcmpl-{i:03d}"}
-            p = tmp_path / f"chatcmpl-{i:03d}.json"
+            log = {**SAMPLE_LOG, "request_id": f"chatcmpl-{i:08x}"}
+            p = tmp_path / f"chatcmpl-{i:08x}.json"
             p.write_text(json.dumps(log))
 
         result = _get_recent_logs(limit=2)
@@ -426,12 +426,12 @@ class TestDashboardRequests:
         from fastapi.responses import StreamingResponse
 
         monkeypatch.setenv("LOG_DIR", str(tmp_path))
-        log = {**SAMPLE_LOG, "request_id": "chatcmpl-done1"}
-        log_path = tmp_path / "chatcmpl-done1.json"
+        log = {**SAMPLE_LOG, "request_id": "chatcmpl-d0000001"}
+        log_path = tmp_path / "chatcmpl-d0000001.json"
         log_path.write_text(json.dumps(log))
 
         state = DashboardState()
-        state.request_started("chatcmpl-live1", "sonnet")
+        state.request_started("chatcmpl-11000001", "sonnet")
         pool_fn = lambda: {"size": 3, "available": 2, "in_use": 1}
         router = create_dashboard_router(state, pool_fn)
 
@@ -457,8 +457,8 @@ class TestDashboardRequests:
             loop.close()
 
         content = "".join(chunks)
-        assert "chatcmpl-live1" in content or "live1" in content
-        assert "chatcmpl-done1" in content or "done1" in content
+        assert "chatcmpl-11000001" in content or "11000001" in content
+        assert "chatcmpl-d0000001" in content or "d0000001" in content
         assert "request-row-active" in content
 
 
@@ -469,31 +469,31 @@ class TestDashboardRequestDetail:
     def test_active_request_shows_live_stream(self):
         """Active request detail shows 'Live Stream'."""
         state = DashboardState()
-        state.request_started("chatcmpl-live1", "sonnet")
+        state.request_started("chatcmpl-11111111", "sonnet")
         app = _make_app(state=state)
         client = TestClient(app)
-        resp = client.get("/dashboard/request/chatcmpl-live1")
+        resp = client.get("/dashboard/request/chatcmpl-11111111")
         assert resp.status_code == 200
         assert "Live Stream" in resp.text
 
     def test_log_file_request_shows_detail(self, tmp_path, monkeypatch):
         """Completed request detail is rendered from log file."""
         monkeypatch.setenv("LOG_DIR", str(tmp_path))
-        log_path = tmp_path / "chatcmpl-abc123.json"
+        log_path = tmp_path / "chatcmpl-00abc123.json"
         log_path.write_text(json.dumps(SAMPLE_LOG))
 
         app = _make_app()
         client = TestClient(app)
-        resp = client.get("/dashboard/request/chatcmpl-abc123")
+        resp = client.get("/dashboard/request/chatcmpl-00abc123")
         assert resp.status_code == 200
-        assert "chatcmpl-abc123" in resp.text
+        assert "chatcmpl-00abc123" in resp.text
 
     def test_unknown_request_returns_404(self, tmp_path, monkeypatch):
         """Unknown request returns 404."""
         monkeypatch.setenv("LOG_DIR", str(tmp_path))
         app = _make_app()
         client = TestClient(app)
-        resp = client.get("/dashboard/request/chatcmpl-nonexistent")
+        resp = client.get("/dashboard/request/chatcmpl-deadbeef")
         assert resp.status_code == 404
 
 
@@ -505,5 +505,5 @@ class TestDashboardStream:
         """Streaming an inactive request returns 404."""
         app = _make_app()
         client = TestClient(app)
-        resp = client.get("/dashboard/stream/chatcmpl-nope")
+        resp = client.get("/dashboard/stream/chatcmpl-00000000")
         assert resp.status_code == 404

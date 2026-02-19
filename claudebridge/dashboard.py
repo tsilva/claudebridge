@@ -197,9 +197,15 @@ def _get_recent_logs(limit: int = 20) -> list[dict]:
     if not log_dir.exists():
         return []
 
+    def _mtime(f: Path) -> float:
+        try:
+            return f.stat().st_mtime
+        except OSError:
+            return 0.0
+
     log_files = sorted(
         log_dir.glob("*.json"),
-        key=lambda f: f.stat().st_mtime,
+        key=_mtime,
         reverse=True,
     )
 
@@ -429,6 +435,8 @@ def create_dashboard_router(
     @router.get("/dashboard/stream/{request_id}")
     async def dashboard_stream(request_id: str):
         """SSE endpoint for live token streaming."""
+        if not re.fullmatch(r"chatcmpl-[a-f0-9]{8,32}", request_id):
+            raise HTTPException(status_code=400, detail="Invalid request ID")
         queue = state.subscribe(request_id)
         if queue is None:
             raise HTTPException(status_code=404, detail="Request not active")
