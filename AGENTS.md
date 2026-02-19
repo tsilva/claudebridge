@@ -57,7 +57,7 @@ claudebridge/
 
 ## Environment Variables
 
-- `POOL_SIZE` - Number of pooled clients (default: 3)
+- `POOL_SIZE` - Number of pooled clients (default: 1, configurable via `--workers`)
 - `CLAUDE_TIMEOUT` - Request timeout in seconds (default: 120)
 - `PORT` - Server port (default: 8082)
 

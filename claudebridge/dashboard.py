@@ -342,6 +342,10 @@ def create_dashboard_router(
     @router.get("/dashboard/request/{request_id}", response_class=HTMLResponse)
     async def dashboard_request_detail(request_id: str, request: Request):
         """Render request detail — checks active state first, then log file."""
+        # Validate request_id format to prevent path traversal
+        if not re.fullmatch(r"chatcmpl-[a-f0-9]{8,32}", request_id):
+            raise HTTPException(status_code=400, detail="Invalid request ID")
+
         # Check active requests first
         active_requests = state.get_active_requests()
         active = None

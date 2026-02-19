@@ -18,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
 # Claude palette (24-bit true color)
@@ -382,7 +383,7 @@ class SessionLogger:
         data = {
             "request_id": self.request_id,
             "model": self.model,
-            "api_key": self.api_key,
+            "api_key": (self.api_key[:8] + "...") if self.api_key else None,
             "timestamp": self.start_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             "messages": msg_list,
             "parameters": {
@@ -406,7 +407,13 @@ class SessionLogger:
 
         try:
             loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, _do_write)
+            future = loop.run_in_executor(None, _do_write)
+
+            def _on_write_done(fut: "asyncio.Future[None]") -> None:
+                if not fut.cancelled() and fut.exception():
+                    logging.error(f"[session_logger] Failed to write log {self.log_path}: {fut.exception()}")
+
+            future.add_done_callback(_on_write_done)
         except RuntimeError:
             # No running event loop (e.g. tests) — run synchronously
             _do_write()
@@ -534,19 +541,22 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     }
     error_type = error_types.get(exc.status_code, "server_error")
 
-    # Extract request_id from BridgeHTTPException
-    code = getattr(exc, "request_id", None)
+    # Extract request_id from BridgeHTTPException for response header
+    request_id = getattr(exc, "request_id", None)
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=exc.status_code,
         content=ErrorResponse(
             error=ErrorDetail(
                 message=str(exc.detail),
                 type=error_type,
-                code=code,
+                code=error_type,
             )
         ).model_dump(),
     )
+    if request_id:
+        response.headers["X-Request-Id"] = request_id
+    return response
 
 
 @app.exception_handler(UnsupportedModelError)
@@ -560,6 +570,25 @@ async def unsupported_model_handler(request: Request, exc: UnsupportedModelError
                 type="invalid_request_error",
                 param="model",
                 code="model_not_found",
+            )
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Convert Pydantic validation errors to OpenAI error format."""
+    first_error = exc.errors()[0] if exc.errors() else {}
+    message = first_error.get("msg", "Invalid request")
+    param = ".".join(str(p) for p in first_error.get("loc", [])) or None
+    return JSONResponse(
+        status_code=400,
+        content=ErrorResponse(
+            error=ErrorDetail(
+                message=f"Invalid request: {message}",
+                type="invalid_request_error",
+                param=param,
+                code="invalid_request_error",
             )
         ).model_dump(),
     )
@@ -943,6 +972,7 @@ async def stream_claude_sdk(
     created = int(time.time())
     start_time = time.monotonic()
     finish_reason = "stop"
+    _dashboard_handled = False  # True once request_completed or request_errored has been called
 
     # Add tool prompt if tools are provided
     effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
@@ -1036,6 +1066,7 @@ async def stream_claude_sdk(
         )
         session_logger.log_finish(finish_reason)
         dashboard_state.request_completed(request_id, usage=usage_dict)
+        _dashboard_handled = True
 
         # Send final chunk with usage data
         final_chunk = ChatCompletionChunk(
@@ -1056,6 +1087,7 @@ async def stream_claude_sdk(
             pool_snapshot=snap,
         )
         dashboard_state.request_errored(request_id, f"Timeout after {CLAUDE_TIMEOUT}s")
+        _dashboard_handled = True
         error_chunk = ChatCompletionChunk(
             id=request_id,
             created=created,
@@ -1079,6 +1111,7 @@ async def stream_claude_sdk(
             pool_snapshot=snap,
         )
         dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
+        _dashboard_handled = True
         error_chunk = ChatCompletionChunk(
             id=request_id,
             created=created,
@@ -1092,8 +1125,9 @@ async def stream_claude_sdk(
         yield "data: [DONE]\n\n"
         return
     finally:
-        # Handles GeneratorExit/CancelledError — no-op if already completed/errored
-        dashboard_state.request_errored(request_id, "Request cancelled")
+        # Handles GeneratorExit/CancelledError — only fires if not already handled
+        if not _dashboard_handled:
+            dashboard_state.request_errored(request_id, "Request cancelled")
 
 
 @app.post("/api/v1/chat/completions")
@@ -1108,6 +1142,10 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     When the model decides to use tools, the response will include `tool_calls`
     with `finish_reason="tool_calls"`.
     """
+    # Guard: pool must be initialized before handling requests
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Service unavailable: server is still initializing")
+
     # Validate model early to fail fast (UnsupportedModelError handled by exception handler)
     resolve_model(request.model)
 
