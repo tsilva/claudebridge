@@ -125,6 +125,51 @@ class AttachmentInfo:
     filename: str  # e.g. "msg0_att0.png"
 
 
+def extract_attachment_metadata(
+    messages: list,
+) -> list[dict]:
+    """Extract attachment metadata from multimodal messages without decoding binary data.
+
+    Returns lightweight dicts with msg_index, att_index, media_type, filename.
+    Used for logging — avoids the memory/CPU cost of base64 decoding.
+    """
+    result = []
+    for msg_idx, msg in enumerate(messages):
+        if not isinstance(msg.content, list):
+            continue
+        att_idx = 0
+        for part in msg.content:
+            if not isinstance(part, ImageUrlContent):
+                continue
+            url = part.image_url.url
+            if is_data_url(url):
+                media_type, _ = parse_data_url(url)
+                ext = EXTENSION_MAP.get(media_type, ".bin")
+                filename = f"msg{msg_idx}_att{att_idx}{ext}"
+                result.append({
+                    "msg_index": msg_idx,
+                    "att_index": att_idx,
+                    "media_type": media_type,
+                    "filename": filename,
+                })
+            elif is_http_url(url):
+                ext = ".png"
+                parsed_path = urllib.parse.urlparse(url).path.lower()
+                for mt, e in EXTENSION_MAP.items():
+                    if parsed_path.endswith(e):
+                        ext = e
+                        break
+                filename = f"msg{msg_idx}_att{att_idx}{ext}"
+                result.append({
+                    "msg_index": msg_idx,
+                    "att_index": att_idx,
+                    "media_type": "image/unknown",
+                    "filename": filename,
+                })
+            att_idx += 1
+    return result
+
+
 def extract_attachments_from_messages(
     messages: list,
 ) -> list[AttachmentInfo]:
@@ -365,25 +410,17 @@ class SessionLogger:
         if self.output_tokens is not None:
             usage["output_tokens"] = self.output_tokens
 
-        # Build attachments metadata
+        # Build attachments metadata (no base64 decode needed for logging)
         att_meta = []
         try:
-            attachments = extract_attachments_from_messages(messages)
-            for att in attachments:
-                entry = {
-                    "msg_index": att.msg_index,
-                    "att_index": att.att_index,
-                    "media_type": att.media_type,
-                    "filename": att.filename,
-                }
-                att_meta.append(entry)
+            att_meta = extract_attachment_metadata(messages)
         except Exception:
             pass
 
         data = {
             "request_id": self.request_id,
             "model": self.model,
-            "api_key": (self.api_key[:8] + "...") if self.api_key else None,
+            "api_key": (self.api_key[:4] + "***") if self.api_key and len(self.api_key) > 4 else ("***" if self.api_key else None),
             "timestamp": self.start_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             "messages": msg_list,
             "parameters": {
@@ -489,7 +526,6 @@ async def lifespan(app: FastAPI):
     """Manage application lifespan - initialize and shutdown pool."""
     global pool
     pool_size = int(os.environ.get("POOL_SIZE", 1))
-    timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
     port = int(os.environ.get("PORT", 8082))
 
     pool = ClientPool(size=pool_size, default_model="opus", on_change=dashboard_state.notify_pool_change)
@@ -935,6 +971,7 @@ async def call_claude_sdk(
         raise
     except BaseException:
         # Handles asyncio.CancelledError and other non-Exception BaseExceptions
+        session_logger.log_error("Request cancelled", exception_type="CancelledError")
         dashboard_state.request_errored(request_id, "Request cancelled")
         raise
 
@@ -1094,7 +1131,27 @@ async def stream_claude_sdk(
             model=model,
             choices=[StreamChoice(
                 delta=DeltaMessage(content=f"\n\n[Error: Request timed out. Increase CLAUDE_TIMEOUT env var for longer requests.]"),
-                finish_reason="stop",
+                finish_reason=None,
+            )],
+        )
+        yield f"data: {error_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    except HTTPException as he:
+        logging.error(f"[{request_id}] HTTPException {he.status_code}: {he.detail}")
+        session_logger.log_error(
+            str(he.detail),
+            exception_type="HTTPException",
+        )
+        dashboard_state.request_errored(request_id, f"HTTP {he.status_code}: {he.detail}")
+        _dashboard_handled = True
+        error_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=model,
+            choices=[StreamChoice(
+                delta=DeltaMessage(content=f"\n\n[Error: {he.detail}]"),
+                finish_reason=None,
             )],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
@@ -1118,7 +1175,7 @@ async def stream_claude_sdk(
             model=model,
             choices=[StreamChoice(
                 delta=DeltaMessage(content="\n\n[Error: An internal error occurred.]"),
-                finish_reason="stop",
+                finish_reason=None,
             )],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
@@ -1176,6 +1233,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
             headers={
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
+                "X-Request-Id": request_id,
             },
         )
 

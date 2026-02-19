@@ -41,7 +41,7 @@ class _ActiveRequest:
         return {
             "request_id": self.request_id,
             "model": self.model,
-            "api_key": self.api_key,
+            "api_key": _mask_api_key(self.api_key),
             "elapsed_s": round(time.monotonic() - self.start_time, 2),
             "status": self.status,
             "chunks_received": self.chunks_received,
@@ -73,19 +73,19 @@ class DashboardState:
 
     async def wait_for_pool_change(self, timeout: float = 5.0) -> None:
         """Wait for a pool change notification or timeout, then clear the event."""
+        self._pool_change_event.clear()
         try:
             await asyncio.wait_for(self._pool_change_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             pass
-        self._pool_change_event.clear()
 
     async def wait_for_change(self, timeout: float = 2.0) -> None:
         """Wait for a change notification or timeout, then clear the event."""
+        self._change_event.clear()
         try:
             await asyncio.wait_for(self._change_event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             pass
-        self._change_event.clear()
 
     def request_started(self, request_id: str, model: str, api_key: str | None = None, messages: list[dict] | None = None) -> None:
         self._active[request_id] = _ActiveRequest(request_id, model, api_key=api_key, messages=messages)
@@ -163,12 +163,12 @@ class DashboardState:
 # ---------------------------------------------------------------------------
 
 def _mask_api_key(api_key: str | None) -> str:
-    """Mask API key for display, showing only first 8 chars."""
+    """Mask API key for display, showing only first 4 chars."""
     if not api_key or api_key == "anonymous":
         return "anonymous"
-    if len(api_key) <= 8:
-        return api_key
-    return api_key[:8] + "..."
+    if len(api_key) <= 4:
+        return "***"
+    return api_key[:4] + "***"
 
 
 TEMPLATES_DIR = Path(__file__).parent / "templates" / "dashboard"
@@ -418,6 +418,9 @@ def create_dashboard_router(
 
         log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
         file_path = log_dir / f"{request_id}_attachments" / filename
+        # Resolved-path containment check to prevent path traversal
+        if not file_path.resolve().is_relative_to(log_dir.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid filename")
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="Attachment not found")
 
@@ -448,7 +451,14 @@ def create_dashboard_router(
                         yield "event: done\ndata: complete\n\n"
                         return
                     elif msg["type"] == "error":
-                        yield f"event: error\ndata: {msg['error']}\n\n"
+                        escaped_err = (
+                            msg["error"]
+                            .replace("&", "&amp;")
+                            .replace("<", "&lt;")
+                            .replace(">", "&gt;")
+                        )
+                        data_lines = "\n".join(f"data: {l}" for l in escaped_err.splitlines()) if "\n" in escaped_err else f"data: {escaped_err}"
+                        yield f"event: error\n{data_lines}\n\n"
                         return
             finally:
                 state.unsubscribe(request_id, queue)

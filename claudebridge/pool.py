@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Callable
 
@@ -191,11 +192,11 @@ class ClientPool:
                 detail=f"All pool clients busy. Timed out after {self._acquire_timeout}s waiting for an available client."
             )
 
-        client: ClaudeSDKClient | None = None
-        old_to_discard: ClaudeSDKClient | None = None
-        completed = False
-
         try:
+            client: ClaudeSDKClient | None = None
+            old_to_discard: ClaudeSDKClient | None = None
+            completed = False
+
             async with self._lock:
                 # Take a pre-warmed client with matching model if available
                 matching = [c for c in self._available if self._client_models[c] == model]
@@ -235,8 +236,9 @@ class ClientPool:
                 status = "after use" if completed else "after cancellation"
                 logger.info(f"{tag} Destroyed {model} client {status}")
                 await self._disconnect_client(client)
-            # Pre-warm a replacement
-            self._spawn_background(self._prewarm_client(model))
+            # Pre-warm a replacement (only if still running, not during shutdown)
+            if self._initialized:
+                self._spawn_background(self._prewarm_client(model))
             self._semaphore.release()
             self._log_status("Released", request_id)
 
@@ -249,14 +251,18 @@ class ClientPool:
                     return
 
             client = await self._create_client(model)
+            discard = False
             async with self._lock:
                 if len(self._available) + self._in_use < self.size:
                     self._available.append(client)
                     logger.info(f"[pool] Pre-warmed {model} client")
                     self._fire_change()
                 else:
-                    await self._disconnect_client(client)
+                    discard = True
                     self._fire_change()
+            # Disconnect outside the lock to avoid blocking pool operations
+            if discard:
+                await self._disconnect_client(client)
         except Exception as e:
             logger.warning(f"[pool] Pre-warm failed: {e}")
 
@@ -307,6 +313,9 @@ class ClientPool:
         """Disconnect all clients and clean up."""
         logger.info(f"[pool] Shutting down {len(self._client_models)} clients...")
 
+        # Prevent new prewarms from spawning (BUG 14 fix cooperates with this)
+        self._initialized = False
+
         # Cancel health check task
         if self._health_check_task is not None:
             self._health_check_task.cancel()
@@ -315,6 +324,19 @@ class ClientPool:
             except asyncio.CancelledError:
                 pass
             self._health_check_task = None
+
+        # Drain in-flight requests before disconnecting clients
+        drain_timeout = int(os.environ.get("SHUTDOWN_DRAIN_TIMEOUT", 30))
+        deadline = time.monotonic() + drain_timeout
+        while self._in_use > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    f"[pool] Shutdown drain timeout after {drain_timeout}s "
+                    f"({self._in_use} request(s) still in flight — forcing cleanup)"
+                )
+                break
+            await asyncio.sleep(0.1)
 
         # Wait for in-flight background tasks (disconnects, pre-warms)
         if self._background_tasks:
@@ -326,7 +348,6 @@ class ClientPool:
             await self._disconnect_client(client)
 
         self._available.clear()
-        self._initialized = False
         self._in_use = 0
         self._fire_change()
 
