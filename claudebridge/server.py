@@ -342,9 +342,10 @@ class SessionLogger:
         # Format messages for JSON
         msg_list = []
         for msg in messages:
+            content = "" if msg.content is None else extract_text_from_content(msg.content)
             msg_list.append({
                 "role": msg.role,
-                "content": extract_text_from_content(msg.content),
+                "content": content,
             })
 
         # Build timing dict
@@ -400,7 +401,13 @@ class SessionLogger:
 
         # Save binary attachments
         self._save_attachments(messages)
-        self._cleanup_old_logs()
+        # Run O(n) cleanup off the event loop when called from async context
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, self._cleanup_old_logs)
+        except RuntimeError:
+            # No running event loop (e.g. tests) — run synchronously
+            self._cleanup_old_logs()
 
     def _save_attachments(self, messages: list) -> None:
         """Save binary attachments alongside the log file."""
@@ -452,6 +459,7 @@ _UNSUPPORTED_PARAMS = {
     "temperature", "top_p", "frequency_penalty", "presence_penalty",
     "stop", "n", "seed", "response_format", "logit_bias", "logprobs",
     "top_logprobs", "parallel_tool_calls", "stream_options", "user",
+    "max_tokens",  # Accepted but not supported: pool pre-warms clients without this
 }
 
 
@@ -563,7 +571,7 @@ async def general_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content=ErrorResponse(
             error=ErrorDetail(
-                message=f"Internal error: {type(exc).__name__}: {str(exc)}",
+                message="Internal server error",
                 type="server_error",
             )
         ).model_dump(),
@@ -614,6 +622,8 @@ def format_multimodal_messages(messages: list[Message]) -> list[dict]:
     system_prompt = None
 
     for msg in messages:
+        if msg.content is None:
+            continue
         if msg.role == "system":
             system_prompt = extract_text_from_content(msg.content)
         else:
@@ -885,6 +895,10 @@ async def call_claude_sdk(
         )
         dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
         raise
+    except BaseException:
+        # Handles asyncio.CancelledError and other non-Exception BaseExceptions
+        dashboard_state.request_errored(request_id, "Request cancelled")
+        raise
 
     return response
 
@@ -942,40 +956,37 @@ async def stream_claude_sdk(
         async with pool.acquire(resolved_model, request_id=request_id) as client:
             acquire_ms = int((time.monotonic() - acquire_start) * 1000)
             query_start = time.monotonic()
-            await send_query(client, effective_prompt)
-            async for msg in client.receive_response():
-                # Check timeout
-                if time.monotonic() - start_time > CLAUDE_TIMEOUT:
-                    session_logger.log_error(f"Timeout after {CLAUDE_TIMEOUT}s")
-                    raise asyncio.TimeoutError(f"Claude SDK timed out after {CLAUDE_TIMEOUT}s")
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            session_logger.log_chunk(block.text)
-                            dashboard_state.chunk_received(request_id, block.text)
-                            full_text += block.text
+            async with asyncio.timeout(CLAUDE_TIMEOUT):
+                await send_query(client, effective_prompt)
+                async for msg in client.receive_response():
+                    if isinstance(msg, AssistantMessage):
+                        for block in msg.content:
+                            if isinstance(block, TextBlock):
+                                session_logger.log_chunk(block.text)
+                                dashboard_state.chunk_received(request_id, block.text)
+                                full_text += block.text
 
-                            # If no tools, stream directly; otherwise buffer
-                            if not tools:
-                                chunk = ChatCompletionChunk(
-                                    id=request_id,
-                                    created=created,
-                                    model=model,
-                                    choices=[StreamChoice(delta=DeltaMessage(content=block.text))],
-                                )
-                                yield f"data: {chunk.model_dump_json()}\n\n"
-                elif isinstance(msg, ResultMessage):
-                    # Capture usage data from result
-                    if msg.usage:
-                        prompt_tokens = msg.usage.get("input_tokens", 0)
-                        completion_tokens = msg.usage.get("output_tokens", 0)
-                        stream_usage = Usage(
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=completion_tokens,
-                            total_tokens=prompt_tokens + completion_tokens,
-                        )
-                        session_logger.log_usage(prompt_tokens, completion_tokens)
-                    break
+                                # If no tools, stream directly; otherwise buffer
+                                if not tools:
+                                    chunk = ChatCompletionChunk(
+                                        id=request_id,
+                                        created=created,
+                                        model=model,
+                                        choices=[StreamChoice(delta=DeltaMessage(content=block.text))],
+                                    )
+                                    yield f"data: {chunk.model_dump_json()}\n\n"
+                    elif isinstance(msg, ResultMessage):
+                        # Capture usage data from result
+                        if msg.usage:
+                            prompt_tokens = msg.usage.get("input_tokens", 0)
+                            completion_tokens = msg.usage.get("output_tokens", 0)
+                            stream_usage = Usage(
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                                total_tokens=prompt_tokens + completion_tokens,
+                            )
+                            session_logger.log_usage(prompt_tokens, completion_tokens)
+                        break
             query_ms = int((time.monotonic() - query_start) * 1000)
             session_logger.log_timing(acquire_ms, query_ms)
 
@@ -995,14 +1006,17 @@ async def stream_claude_sdk(
                     yield f"data: {chunk.model_dump_json()}\n\n"
                 session_logger.log_chunk(f"[parsed tool_call: {tool_calls[0].function.name}]")
             else:
-                # No tool calls found, send the text
-                chunk = ChatCompletionChunk(
-                    id=request_id,
-                    created=created,
-                    model=model,
-                    choices=[StreamChoice(delta=DeltaMessage(content=full_text))],
-                )
-                yield f"data: {chunk.model_dump_json()}\n\n"
+                # No tool calls found, stream the buffered text in chunks
+                _CHUNK_SIZE = 100
+                for i in range(0, len(full_text), _CHUNK_SIZE):
+                    text_chunk = full_text[i:i + _CHUNK_SIZE]
+                    chunk = ChatCompletionChunk(
+                        id=request_id,
+                        created=created,
+                        model=model,
+                        choices=[StreamChoice(delta=DeltaMessage(content=text_chunk))],
+                    )
+                    yield f"data: {chunk.model_dump_json()}\n\n"
 
         total_ms = (session_logger.acquire_ms or 0) + (session_logger.query_ms or 0)
         usage_dict = stream_usage.model_dump() if stream_usage else {}
@@ -1013,6 +1027,17 @@ async def stream_claude_sdk(
         )
         session_logger.log_finish(finish_reason)
         dashboard_state.request_completed(request_id, usage=usage_dict)
+
+        # Send final chunk with usage data
+        final_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason=finish_reason)],
+            usage=stream_usage,
+        )
+        yield f"data: {final_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
     except asyncio.TimeoutError:
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
@@ -1027,8 +1052,8 @@ async def stream_claude_sdk(
             created=created,
             model=model,
             choices=[StreamChoice(
-                delta=DeltaMessage(content=f"\n\n[Error: Claude SDK timed out after {CLAUDE_TIMEOUT}s. Increase CLAUDE_TIMEOUT env var for longer requests.]"),
-                finish_reason="error",
+                delta=DeltaMessage(content=f"\n\n[Error: Request timed out. Increase CLAUDE_TIMEOUT env var for longer requests.]"),
+                finish_reason="stop",
             )],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
@@ -1050,24 +1075,16 @@ async def stream_claude_sdk(
             created=created,
             model=model,
             choices=[StreamChoice(
-                delta=DeltaMessage(content=f"\n\n[Error: {type(e).__name__}: {str(e)}]"),
-                finish_reason="error",
+                delta=DeltaMessage(content="\n\n[Error: An internal error occurred.]"),
+                finish_reason="stop",
             )],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
         return
-
-    # Send final chunk with usage data
-    final_chunk = ChatCompletionChunk(
-        id=request_id,
-        created=created,
-        model=model,
-        choices=[StreamChoice(delta=DeltaMessage(), finish_reason=finish_reason)],
-        usage=stream_usage,
-    )
-    yield f"data: {final_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+    finally:
+        # Handles GeneratorExit/CancelledError — no-op if already completed/errored
+        dashboard_state.request_errored(request_id, "Request cancelled")
 
 
 @app.post("/api/v1/chat/completions")
@@ -1109,6 +1126,10 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         return StreamingResponse(
             stream_with_logging(),
             media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     try:

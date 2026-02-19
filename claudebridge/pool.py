@@ -271,19 +271,25 @@ class ClientPool:
             except Exception:
                 model = self._client_models.get(client, self.default_model)
                 logger.warning(f"[pool] Health check: {model} client unresponsive, replacing")
+                removed = False
                 async with self._lock:
                     if client in self._available:
                         self._available.remove(client)
-                await self._disconnect_client(client)
-                self._fire_change()
-                try:
-                    new_client = await self._create_client(model)
-                    async with self._lock:
-                        self._available.append(new_client)
+                        removed = True
+                if removed:
+                    await self._disconnect_client(client)
                     self._fire_change()
-                    logger.info(f"[pool] Health check: replaced unresponsive {model} client")
-                except Exception as e:
-                    logger.error(f"[pool] Health check: failed to replace client: {e}")
+                    try:
+                        new_client = await self._create_client(model)
+                        async with self._lock:
+                            if len(self._available) + self._in_use < self.size:
+                                self._available.append(new_client)
+                                self._fire_change()
+                                logger.info(f"[pool] Health check: replaced unresponsive {model} client")
+                            else:
+                                await self._disconnect_client(new_client)
+                    except Exception as e:
+                        logger.error(f"[pool] Health check: failed to replace client: {e}")
 
     async def shutdown(self) -> None:
         """Disconnect all clients and clean up."""

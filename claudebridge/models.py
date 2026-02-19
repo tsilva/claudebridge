@@ -58,9 +58,11 @@ ContentPart = Annotated[Union[TextContent, ImageUrlContent], Field(discriminator
 
 
 class Message(BaseModel):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: str | list[ContentPart] | None = None  # None when tool_calls present
     tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None  # Present when role="tool"
+    name: str | None = None  # Tool name when role="tool"
 
 
 class ChatCompletionRequest(BaseModel):
