@@ -65,6 +65,9 @@ class ClientPool:
         self._available: list[ClaudeSDKClient] = []  # pre-warmed clients
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(size)  # limits concurrent usage
+        self._prewarm_semaphore = asyncio.Semaphore(max(1, size // 2))  # bounds concurrent pre-warm spawns
+        self._prewarm_cooldown_until: float = 0  # monotonic timestamp until pre-warms are skipped
+        self._prewarm_consecutive_failures: int = 0  # tracks consecutive pre-warm failures
         self._initialized = False
         self._in_use = 0
         self._acquire_timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
@@ -274,27 +277,44 @@ class ClientPool:
 
     async def _prewarm_client(self, model: str) -> None:
         """Create a fresh client and add to available pool for next request."""
-        try:
-            # Pre-check capacity before creating client to avoid unnecessary work
-            async with self._lock:
-                if len(self._available) + self._in_use >= self.size:
-                    return
+        # Circuit breaker: skip if in cooldown from recent failures
+        if time.monotonic() < self._prewarm_cooldown_until:
+            return
 
-            client = await self._create_client(model)
-            discard = False
-            async with self._lock:
-                if len(self._available) + self._in_use < self.size:
-                    self._available.append(client)
-                    logger.info(f"[pool] Pre-warmed {model} client")
-                    self._fire_change()
-                else:
-                    discard = True
-                    self._fire_change()
-            # Disconnect outside the lock to avoid blocking pool operations
-            if discard:
-                await self._disconnect_client(client)
-        except Exception as e:
-            logger.warning(f"[pool] Pre-warm failed: {e}")
+        # Fast path: skip if pool is already full
+        async with self._lock:
+            if len(self._available) + self._in_use >= self.size:
+                return
+
+        # Limit concurrent pre-warm subprocess spawns
+        async with self._prewarm_semaphore:
+            try:
+                # Re-check capacity after acquiring semaphore (eliminates TOCTOU)
+                async with self._lock:
+                    if len(self._available) + self._in_use >= self.size:
+                        return
+
+                client = await self._create_client(model)
+                discard = False
+                async with self._lock:
+                    if len(self._available) + self._in_use < self.size:
+                        self._available.append(client)
+                        logger.info(f"[pool] Pre-warmed {model} client")
+                        self._fire_change()
+                    else:
+                        discard = True
+                        self._fire_change()
+                if discard:
+                    await self._disconnect_client(client)
+
+                # Success: reset circuit breaker
+                self._prewarm_consecutive_failures = 0
+                self._prewarm_cooldown_until = 0
+            except Exception as e:
+                self._prewarm_consecutive_failures += 1
+                delay = min(2 ** self._prewarm_consecutive_failures, 30)
+                self._prewarm_cooldown_until = time.monotonic() + delay
+                logger.warning(f"[pool] Pre-warm failed (backoff {delay}s): {e}")
 
     async def _periodic_health_check(self) -> None:
         """Background task that checks idle client health every HEALTH_CHECK_INTERVAL seconds."""
