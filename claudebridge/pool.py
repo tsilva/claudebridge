@@ -12,7 +12,7 @@ from typing import AsyncIterator, Callable
 logger = logging.getLogger(__name__)
 
 # Claude palette (24-bit true color)
-_CLAUDE = "\033[38;2;218;119;86m"   # Terracotta — Claude's signature orange
+_CLAUDE = "\033[38;2;218;119;86m"  # Terracotta — Claude's signature orange
 _DIM = "\033[2m"
 _GREEN = "\033[32m"
 _RESET = "\033[0m"
@@ -45,7 +45,12 @@ class ClientPool:
     they are destroyed after each request. Background pre-warming hides creation latency.
     """
 
-    def __init__(self, size: int = 3, default_model: str = "opus", on_change: Callable[[], None] | None = None):
+    def __init__(
+        self,
+        size: int = 3,
+        default_model: str = "opus",
+        on_change: Callable[[], None] | None = None,
+    ):
         """Initialize client pool.
 
         Args:
@@ -77,15 +82,21 @@ class ClientPool:
             return
 
         label = "client" if self.size == 1 else "clients"
-        logger.info(f"{_CLAUDE}[pool]{_RESET} Warming {self.size} {self.default_model} {label}...")
+        logger.info(
+            f"{_CLAUDE}[pool]{_RESET} Warming {self.size} {self.default_model} {label}..."
+        )
         for i in range(self.size):
             client = await self._create_client(self.default_model)
             self._available.append(client)
             if self.size > 1:
-                logger.info(f"{_CLAUDE}[pool]{_RESET} Client {i + 1}/{self.size} connected {_DIM}({self.default_model}){_RESET}")
+                logger.info(
+                    f"{_CLAUDE}[pool]{_RESET} Client {i + 1}/{self.size} connected {_DIM}({self.default_model}){_RESET}"
+                )
 
         self._initialized = True
-        logger.info(f"{_CLAUDE}[pool]{_RESET} {_GREEN}Ready{_RESET} | available={len(self._available)}")
+        logger.info(
+            f"{_CLAUDE}[pool]{_RESET} {_GREEN}Ready{_RESET} | available={len(self._available)}"
+        )
         self._fire_change()
 
         # Start periodic health check
@@ -163,7 +174,9 @@ class ClientPool:
         }
 
     @asynccontextmanager
-    async def acquire(self, model: str, request_id: str | None = None) -> AsyncIterator[ClaudeSDKClient]:
+    async def acquire(
+        self, model: str, request_id: str | None = None
+    ) -> AsyncIterator[ClaudeSDKClient]:
         """Get a fresh client for the specified model.
 
         Takes a pre-warmed client with matching model if available,
@@ -185,11 +198,14 @@ class ClientPool:
                 self._semaphore.acquire(), timeout=self._acquire_timeout
             )
         except asyncio.TimeoutError:
-            logger.error(f"{tag} Semaphore timeout after {self._acquire_timeout}s | pool={self.snapshot()}")
+            logger.error(
+                f"{tag} Semaphore timeout after {self._acquire_timeout}s | pool={self.snapshot()}"
+            )
             from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=503,
-                detail=f"All pool clients busy. Timed out after {self._acquire_timeout}s waiting for an available client."
+                detail=f"All pool clients busy. Timed out after {self._acquire_timeout}s waiting for an available client.",
             )
 
         try:
@@ -199,7 +215,9 @@ class ClientPool:
 
             async with self._lock:
                 # Take a pre-warmed client with matching model if available
-                matching = [c for c in self._available if self._client_models[c] == model]
+                matching = [
+                    c for c in self._available if self._client_models[c] == model
+                ]
                 if matching:
                     client = matching[0]
                     self._available.remove(client)
@@ -215,13 +233,25 @@ class ClientPool:
             # Disconnect non-matching pre-warmed client outside the lock
             if old_to_discard:
                 old_model = self._client_models.get(old_to_discard, "unknown")
-                logger.info(f"{tag} Discarding pre-warmed {old_model} client, need {model}")
-                await self._disconnect_client(old_to_discard)
+                logger.info(
+                    f"{tag} Discarding pre-warmed {old_model} client, need {model}"
+                )
+                try:
+                    await self._disconnect_client(old_to_discard)
+                except asyncio.CancelledError:
+                    logger.warning(
+                        f"{tag} Cancelled while discarding {old_model} client"
+                    )
+                    raise
 
             # Create fresh if no pre-warmed client was available
             if client is None:
-                client = await self._create_client(model)
-                logger.info(f"{tag} Created fresh {model} client")
+                try:
+                    client = await self._create_client(model)
+                    logger.info(f"{tag} Created fresh {model} client")
+                except asyncio.CancelledError:
+                    logger.warning(f"{tag} Cancelled while creating {model} client")
+                    raise
 
             yield client
             completed = True
@@ -283,12 +313,14 @@ class ClientPool:
         for client in clients_to_check:
             try:
                 # Check if the underlying process is still alive
-                if hasattr(client, '_process') and client._process is not None:
+                if hasattr(client, "_process") and client._process is not None:
                     if client._process.returncode is not None:
                         raise RuntimeError("Process exited")
             except Exception:
                 model = self._client_models.get(client, self.default_model)
-                logger.warning(f"[pool] Health check: {model} client unresponsive, replacing")
+                logger.warning(
+                    f"[pool] Health check: {model} client unresponsive, replacing"
+                )
                 removed = False
                 async with self._lock:
                     if client in self._available:
@@ -303,11 +335,15 @@ class ClientPool:
                             if len(self._available) + self._in_use < self.size:
                                 self._available.append(new_client)
                                 self._fire_change()
-                                logger.info(f"[pool] Health check: replaced unresponsive {model} client")
+                                logger.info(
+                                    f"[pool] Health check: replaced unresponsive {model} client"
+                                )
                             else:
                                 await self._disconnect_client(new_client)
                     except Exception as e:
-                        logger.error(f"[pool] Health check: failed to replace client: {e}")
+                        logger.error(
+                            f"[pool] Health check: failed to replace client: {e}"
+                        )
 
     async def shutdown(self) -> None:
         """Disconnect all clients and clean up."""
