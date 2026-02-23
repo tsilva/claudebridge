@@ -523,6 +523,106 @@ class TestClientPoolSnapshot:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+class TestCreateClientCleanup:
+    """Tests for _create_client cleanup on failure."""
+
+    async def test_create_client_disconnects_on_non_timeout_error(self):
+        """disconnect() must be called when connect() raises a non-timeout exception."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.connect.side_effect = RuntimeError("connection refused")
+            MockClient.return_value = mock_client
+
+            with pytest.raises(RuntimeError, match="connection refused"):
+                await pool._create_client("opus")
+
+            # BUG: only TimeoutError triggers cleanup — RuntimeError does NOT call disconnect
+            mock_client.disconnect.assert_called_once()
+
+    async def test_create_client_disconnects_on_timeout_error(self):
+        """disconnect() is called on TimeoutError (regression guard)."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.connect.side_effect = asyncio.TimeoutError()
+            MockClient.return_value = mock_client
+
+            with pytest.raises(asyncio.TimeoutError):
+                await pool._create_client("opus")
+
+            mock_client.disconnect.assert_called_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestHealthCheck:
+    """Tests for _check_idle_clients health check logic."""
+
+    async def test_health_check_replaces_dead_client(self):
+        """Dead subprocess (returncode != None) is detected and replaced."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        # Use spec to restrict attributes — prevents hasattr() from auto-returning True
+        dead_client = AsyncMock(spec=["connect", "disconnect", "_transport"])
+        dead_client._transport = AsyncMock()
+        dead_client._transport._process = AsyncMock()
+        dead_client._transport._process.returncode = 1  # process has exited
+
+        new_client = AsyncMock(spec=["connect", "disconnect", "_transport"])
+        new_client._transport = AsyncMock()
+        new_client._transport._process = AsyncMock()
+        new_client._transport._process.returncode = None  # alive
+
+        pool._available = [dead_client]
+        pool._client_models[dead_client] = "opus"
+
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
+            MockClient.return_value = new_client
+
+            await pool._check_idle_clients()
+
+        # Dead client must be replaced
+        dead_client.disconnect.assert_called_once()
+        assert dead_client not in pool._available
+
+    async def test_health_check_keeps_alive_client(self):
+        """Healthy subprocess (returncode=None) is kept in pool."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        alive_client = AsyncMock(spec=["connect", "disconnect", "_transport"])
+        alive_client._transport = AsyncMock()
+        alive_client._transport._process = AsyncMock()
+        alive_client._transport._process.returncode = None  # still running
+
+        pool._available = [alive_client]
+        pool._client_models[alive_client] = "opus"
+
+        await pool._check_idle_clients()
+
+        alive_client.disconnect.assert_not_called()
+        assert alive_client in pool._available
+
+    async def test_health_check_client_without_transport(self):
+        """Client without _transport attribute is not treated as dead."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        # No _transport in spec — simulates client before transport is set up
+        no_transport_client = AsyncMock(spec=["connect", "disconnect"])
+
+        pool._available = [no_transport_client]
+        pool._client_models[no_transport_client] = "opus"
+
+        await pool._check_idle_clients()
+
+        no_transport_client.disconnect.assert_not_called()
+        assert no_transport_client in pool._available
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 class TestClientPoolRequestIdLogging:
     """Tests for request ID in pool logs."""
 

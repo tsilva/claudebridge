@@ -112,7 +112,7 @@ class ClientPool:
         client = ClaudeSDKClient(make_options(model))
         try:
             await asyncio.wait_for(client.connect(), timeout=30)
-        except asyncio.TimeoutError:
+        except BaseException:
             try:
                 await client.disconnect()
             except BaseException:
@@ -333,8 +333,10 @@ class ClientPool:
         for client in clients_to_check:
             try:
                 # Check if the underlying process is still alive
-                if hasattr(client, "_process") and client._process is not None:
-                    if client._process.returncode is not None:
+                transport = getattr(client, "_transport", None)
+                if transport is not None:
+                    process = getattr(transport, "_process", None)
+                    if process is not None and process.returncode is not None:
                         raise RuntimeError("Process exited")
             except Exception:
                 model = self._client_models.get(client, self.default_model)
