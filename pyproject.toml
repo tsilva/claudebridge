@@ -54,3 +54,9 @@ markers = [
     "unit: mark test as unit test (no server required)",
     "integration: mark test as integration test (requires running server)",
 ]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

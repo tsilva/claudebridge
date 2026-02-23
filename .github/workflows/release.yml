@@ -3,15 +3,44 @@ on:
   push:
     branches: [main]
     paths: [pyproject.toml]
-permissions:
-  contents: write
-  id-token: write
 concurrency:
   group: release
   cancel-in-progress: false
 jobs:
-  release:
-    uses: tsilva/.github/.github/workflows/release.yml@main
-    with:
-      homebrew_tap: tsilva/homebrew-tap
-    secrets: inherit
+  test:
+    uses: tsilva/.github/.github/workflows/test.yml@main
+
+  pii-scan:
+    uses: tsilva/.github/.github/workflows/pii-scan.yml@main
+
+  publish:
+    needs: [test, pii-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check version
+        id: check-version
+        uses: tsilva/.github/.github/actions/check-version@main
+      - name: Setup uv
+        if: steps.check-version.outputs.tag_exists == 'false'
+        uses: astral-sh/setup-uv@v4
+        with:
+          cache: true
+      - name: Build package
+        if: steps.check-version.outputs.tag_exists == 'false'
+        run: uv build
+      - name: Create GitHub release
+        if: steps.check-version.outputs.tag_exists == 'false'
+        run: gh release create "${{ steps.check-version.outputs.tag }}" --title "${{ steps.check-version.outputs.tag }}" --generate-notes dist/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish to PyPI
+        if: steps.check-version.outputs.tag_exists == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
