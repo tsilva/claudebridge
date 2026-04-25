@@ -12,31 +12,31 @@ import json
 import pytest
 
 from claudebridge.models import (
+    ChatCompletionChunk,
     # Request models
     ChatCompletionRequest,
-    Message,
-    TextContent,
-    ImageUrlContent,
-    ImageUrl,
-    Tool,
-    FunctionDefinition,
-    ToolChoiceObject,
-    ToolChoiceFunction,
     # Response models
     ChatCompletionResponse,
-    ChatCompletionChunk,
     Choice,
-    StreamChoice,
     DeltaMessage,
-    Usage,
-    ModelInfo,
-    ModelList,
-    # Tool call models
-    ToolCall,
-    FunctionCall,
     # Error models
     ErrorDetail,
     ErrorResponse,
+    FunctionCall,
+    FunctionDefinition,
+    ImageUrl,
+    ImageUrlContent,
+    Message,
+    ModelInfo,
+    ModelList,
+    StreamChoice,
+    TextContent,
+    Tool,
+    # Tool call models
+    ToolCall,
+    ToolChoiceFunction,
+    ToolChoiceObject,
+    Usage,
 )
 
 

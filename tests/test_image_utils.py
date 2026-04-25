@@ -9,20 +9,20 @@ Usage:
 
 import pytest
 
-from claudebridge.server import (
-    parse_data_url,
-    is_http_url,
-    is_data_url,
-    openai_image_to_claude,
-    openai_content_to_claude,
-    has_multimodal_content,
-    extract_text_from_content,
-)
 from claudebridge.models import (
+    ImageUrl,
+    ImageUrlContent,
     Message,
     TextContent,
-    ImageUrlContent,
-    ImageUrl,
+)
+from claudebridge.server import (
+    extract_text_from_content,
+    has_multimodal_content,
+    is_data_url,
+    is_http_url,
+    openai_content_to_claude,
+    openai_image_to_claude,
+    parse_data_url,
 )
 
 
@@ -32,7 +32,11 @@ class TestParseDataUrl:
 
     def test_parse_png(self):
         """Parse PNG data URL."""
-        url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        url = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwAD"
+            "hgGAWjR9awAAAABJRU5ErkJggg=="
+        )
         media_type, data = parse_data_url(url)
         assert media_type == "image/png"
         assert data.startswith("iVBORw0KGgo")
@@ -67,7 +71,10 @@ class TestParseDataUrl:
 
     def test_parse_svg(self):
         """Parse SVG data URL."""
-        url = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwvc3ZnPg=="
+        url = (
+            "data:image/svg+xml;base64,"
+            "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjwvc3ZnPg=="
+        )
         media_type, data = parse_data_url(url)
         assert media_type == "image/svg+xml"
 

@@ -7,7 +7,10 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Callable
+from typing import TYPE_CHECKING, AsyncIterator, Callable
+
+if TYPE_CHECKING:
+    from claude_agent_sdk import ClaudeSDKClient
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +68,7 @@ class ClientPool:
         self._available: list[ClaudeSDKClient] = []  # pre-warmed clients
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(size)  # limits concurrent usage
-        self._prewarm_semaphore = asyncio.Semaphore(max(1, size // 2))  # bounds concurrent pre-warm spawns
+        self._prewarm_semaphore = asyncio.Semaphore(max(1, size // 2))
         self._prewarm_cooldown_until: float = 0  # monotonic timestamp until pre-warms are skipped
         self._prewarm_consecutive_failures: int = 0  # tracks consecutive pre-warm failures
         self._initialized = False
@@ -93,7 +96,8 @@ class ClientPool:
             self._available.append(client)
             if self.size > 1:
                 logger.info(
-                    f"{_CLAUDE}[pool]{_RESET} Client {i + 1}/{self.size} connected {_DIM}({self.default_model}){_RESET}"
+                    f"{_CLAUDE}[pool]{_RESET} Client {i + 1}/{self.size} "
+                    f"connected {_DIM}({self.default_model}){_RESET}"
                 )
 
         self._initialized = True
@@ -154,7 +158,6 @@ class ClientPool:
 
     def status(self) -> dict:
         """Return current pool status metrics."""
-        models = [self._client_models[c] for c in self._available]
         # Include in-use clients too
         all_models = list(self._client_models.values())
         return {
@@ -208,7 +211,10 @@ class ClientPool:
 
             raise HTTPException(
                 status_code=503,
-                detail=f"All pool clients busy. Timed out after {self._acquire_timeout}s waiting for an available client.",
+                detail=(
+                    f"All pool clients busy. Timed out after {self._acquire_timeout}s "
+                    "waiting for an available client."
+                ),
             )
 
         try:

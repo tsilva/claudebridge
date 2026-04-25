@@ -3,8 +3,8 @@
 import os
 from pathlib import Path
 
-import pytest
 import httpx
+import pytest
 
 SERVER_URL = os.environ.get("BRIDGE_URL", "http://localhost:8082")
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

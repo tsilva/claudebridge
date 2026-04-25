@@ -10,10 +10,10 @@ Usage:
 import pytest
 
 from claudebridge.models import (
-    resolve_model,
-    UnsupportedModelError,
-    SIMPLE_NAMES,
     AVAILABLE_MODELS,
+    SIMPLE_NAMES,
+    UnsupportedModelError,
+    resolve_model,
 )
 
 

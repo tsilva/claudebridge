@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="logo.png" alt="claudebridge" width="512"/>
+  <img src="https://raw.githubusercontent.com/tsilva/claudebridge/main/logo.png" alt="claudebridge" width="512"/>
 
   # claudebridge
 

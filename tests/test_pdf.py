@@ -10,25 +10,21 @@ Usage:
 - Integration tests: pytest tests/test_pdf.py::TestPdfIntegration -v
 """
 
-import base64
 from pathlib import Path
 
-import pytest
-
-from claudebridge.server import (
-    parse_data_url,
-    openai_image_to_claude,
-    openai_content_to_claude,
-    extract_text_from_content,
-)
 from claudebridge.models import (
-    TextContent,
-    ImageUrlContent,
     ImageUrl,
+    ImageUrlContent,
+    TextContent,
+)
+from claudebridge.server import (
+    extract_text_from_content,
+    openai_content_to_claude,
+    openai_image_to_claude,
+    parse_data_url,
 )
 
 from .test_utils import slugify_text, text_similarity
-
 
 # Test fixtures path
 FIXTURES_DIR = Path(__file__).parent / "fixtures"

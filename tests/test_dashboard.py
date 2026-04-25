@@ -16,11 +16,10 @@ from fastapi.testclient import TestClient
 from claudebridge.dashboard import (
     DashboardState,
     _ActiveRequest,
-    _parse_log_file,
     _get_recent_logs,
+    _parse_log_file,
     create_dashboard_router,
 )
-
 
 # ---------------------------------------------------------------------------
 # State tests
@@ -228,7 +227,9 @@ def _make_app(state=None, pool_status_fn=None):
     if state is None:
         state = DashboardState()
     if pool_status_fn is None:
-        pool_status_fn = lambda: {"size": 3, "available": 2, "in_use": 1}
+        def pool_status_fn():
+            return {"size": 3, "available": 2, "in_use": 1}
+
     app = FastAPI()
     router = create_dashboard_router(state, pool_status_fn)
     app.include_router(router)
@@ -394,10 +395,13 @@ class TestDashboardRequests:
         """Requests endpoint returns SSE content-type."""
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
+
         from fastapi.responses import StreamingResponse
 
         state = DashboardState()
-        pool_fn = lambda: {"size": 3, "available": 2, "in_use": 1}
+        def pool_fn():
+            return {"size": 3, "available": 2, "in_use": 1}
+
         router = create_dashboard_router(state, pool_fn)
 
         handler = None
@@ -423,7 +427,7 @@ class TestDashboardRequests:
         """SSE stream renders both active and completed requests."""
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
-        from fastapi.responses import StreamingResponse
+
 
         monkeypatch.setenv("LOG_DIR", str(tmp_path))
         log = {**SAMPLE_LOG, "request_id": "chatcmpl-d0000001"}
@@ -432,7 +436,9 @@ class TestDashboardRequests:
 
         state = DashboardState()
         state.request_started("chatcmpl-11000001", "sonnet")
-        pool_fn = lambda: {"size": 3, "available": 2, "in_use": 1}
+        def pool_fn():
+            return {"size": 3, "available": 2, "in_use": 1}
+
         router = create_dashboard_router(state, pool_fn)
 
         handler = None

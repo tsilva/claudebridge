@@ -21,8 +21,35 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from . import __version__
+from .dashboard import DashboardState, create_dashboard_router
+from .models import (
+    AVAILABLE_MODELS,
+    ChatCompletionChunk,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    Choice,
+    ContentPart,
+    DeltaMessage,
+    ErrorDetail,
+    ErrorResponse,
+    FunctionCall,
+    ImageUrlContent,
+    Message,
+    ModelInfo,
+    ModelList,
+    StreamChoice,
+    TextContent,
+    Tool,
+    ToolCall,
+    UnsupportedModelError,
+    Usage,
+    resolve_model,
+)
+from .pool import ClientPool
+
 # Claude palette (24-bit true color)
-_CLAUDE = "\033[38;2;218;119;86m"   # Terracotta — Claude's signature orange
+_CLAUDE = "\033[38;2;218;119;86m"  # Terracotta — Claude's signature orange
 _CLAUDE_DIM = "\033[38;2;171;93;67m"  # Muted terracotta for secondary accents
 _DIM = "\033[2m"
 _BOLD = "\033[1m"
@@ -68,36 +95,6 @@ def _configure_logging() -> None:
 
     # Suppress verbose SDK internals
     logging.getLogger("claude_agent_sdk").setLevel(logging.WARNING)
-
-from .models import (
-    ChatCompletionRequest,
-    ChatCompletionResponse,
-    ChatCompletionChunk,
-    Choice,
-    StreamChoice,
-    Message,
-    DeltaMessage,
-    ModelList,
-    ModelInfo,
-    Tool,
-    ToolCall,
-    FunctionCall,
-    Usage,
-    ErrorDetail,
-    ErrorResponse,
-)
-from .models import (
-    resolve_model,
-    AVAILABLE_MODELS,
-    UnsupportedModelError,
-    ContentPart,
-    TextContent,
-    ImageUrlContent,
-)
-from .pool import ClientPool
-from .dashboard import DashboardState
-from . import __version__
-
 
 # ---------------------------------------------------------------------------
 # Image format conversion utilities (OpenAI → Claude)
@@ -382,7 +379,13 @@ class SessionLogger:
         if pool_snapshot is not None:
             self.pool_snapshot = pool_snapshot
 
-    def write(self, messages: list, stream: bool, temperature: float | None, max_tokens: int | None) -> None:
+    def write(
+        self,
+        messages: list,
+        stream: bool,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> None:
         """Write the complete session log as JSON."""
         end_time = datetime.now(timezone.utc)
         duration_ms = int((end_time - self.start_time).total_seconds() * 1000)
@@ -421,7 +424,11 @@ class SessionLogger:
         data = {
             "request_id": self.request_id,
             "model": self.model,
-            "api_key": (self.api_key[:4] + "***") if self.api_key and len(self.api_key) > 4 else ("***" if self.api_key else None),
+            "api_key": (
+                (self.api_key[:4] + "***")
+                if self.api_key and len(self.api_key) > 4
+                else ("***" if self.api_key else None)
+            ),
             "timestamp": self.start_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             "messages": msg_list,
             "parameters": {
@@ -452,7 +459,10 @@ class SessionLogger:
 
             def _on_write_done(fut: "asyncio.Future[None]") -> None:
                 if not fut.cancelled() and fut.exception():
-                    logging.error(f"[session_logger] Failed to write log {self.log_path}: {fut.exception()}")
+                    logging.error(
+                        f"[session_logger] Failed to write log {self.log_path}: "
+                        f"{fut.exception()}"
+                    )
 
             future.add_done_callback(_on_write_done)
         except RuntimeError:
@@ -473,7 +483,10 @@ class SessionLogger:
                 if att.content_type == "base64" and att.data:
                     (att_dir / att.filename).write_bytes(att.data)
 
-            logging.info(f"[session_logger] Saved {len(attachments)} attachment(s) for {self.request_id}")
+            logging.info(
+                f"[session_logger] Saved {len(attachments)} attachment(s) "
+                f"for {self.request_id}"
+            )
         except Exception as e:
             logging.warning(f"[session_logger] Failed to save attachments: {e}")
 
@@ -520,14 +533,15 @@ _UNSUPPORTED_PARAMS = {
 
 
 def _warn_unsupported_params(request: "ChatCompletionRequest") -> None:
-    """Log a warning for each unsupported parameter that has a non-None value, once per param."""
+    """Log a warning for unsupported parameters that have a non-None value."""
     for param in _UNSUPPORTED_PARAMS:
         if param not in _warned_params:
             value = getattr(request, param, None)
             if value is not None:
                 _warned_params.add(param)
                 logging.warning(
-                    f"Parameter '{param}' is accepted but not supported by Claude SDK — value ignored"
+                    f"Parameter '{param}' is accepted but not supported by Claude SDK "
+                    "— value ignored"
                 )
 
 
@@ -536,9 +550,12 @@ async def lifespan(app: FastAPI):
     """Manage application lifespan - initialize and shutdown pool."""
     global pool
     pool_size = int(os.environ.get("POOL_SIZE", 1))
-    port = int(os.environ.get("PORT", 8082))
 
-    pool = ClientPool(size=pool_size, default_model="opus", on_change=dashboard_state.notify_pool_change)
+    pool = ClientPool(
+        size=pool_size,
+        default_model="opus",
+        on_change=dashboard_state.notify_pool_change,
+    )
     try:
         await pool.initialize()
     except Exception as e:
@@ -551,13 +568,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Claude Code Bridge", version=__version__, lifespan=lifespan)
 
-# Mount dashboard
-from .dashboard import create_dashboard_router
-
-app.include_router(create_dashboard_router(
-    dashboard_state,
-    pool_status_fn=lambda: pool.status() if pool else {"size": 0, "available": 0, "in_use": 0, "models": []},
-))
+app.include_router(
+    create_dashboard_router(
+        dashboard_state,
+        pool_status_fn=lambda: pool.status()
+        if pool
+        else {"size": 0, "available": 0, "in_use": 0, "models": []},
+    )
+)
 
 # Timeout for Claude SDK calls (in seconds)
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
@@ -900,7 +918,12 @@ async def call_claude_sdk(
 
     resolved_model = resolve_model(model)
     request_id = session_logger.request_id
-    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key, messages=messages)
+    dashboard_state.request_started(
+        request_id,
+        model,
+        api_key=session_logger.api_key,
+        messages=messages,
+    )
 
     # Add tool prompt if tools are provided
     effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
@@ -945,7 +968,9 @@ async def call_claude_sdk(
             if tool_calls:
                 response.text = remaining_text
                 response.tool_calls = tool_calls
-                session_logger.log_chunk(f"[parsed tool_call: {tool_calls[0].function.name}]")
+                session_logger.log_chunk(
+                    f"[parsed tool_call: {tool_calls[0].function.name}]"
+                )
 
         total_ms = (session_logger.acquire_ms or 0) + (session_logger.query_ms or 0)
         usage = response.get_usage()
@@ -960,8 +985,15 @@ async def call_claude_sdk(
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
         # Record partial timing if acquire completed before timeout fired
-        if _acquire_ms is not None and _query_start is not None and session_logger.acquire_ms is None:
-            session_logger.log_timing(_acquire_ms, int((time.monotonic() - _query_start) * 1000))
+        if (
+            _acquire_ms is not None
+            and _query_start is not None
+            and session_logger.acquire_ms is None
+        ):
+            session_logger.log_timing(
+                _acquire_ms,
+                int((time.monotonic() - _query_start) * 1000),
+            )
         session_logger.log_error(
             f"Timeout after {CLAUDE_TIMEOUT}s",
             exception_type="TimeoutError",
@@ -970,7 +1002,10 @@ async def call_claude_sdk(
         dashboard_state.request_errored(request_id, f"Timeout after {CLAUDE_TIMEOUT}s")
         raise BridgeHTTPException(
             status_code=504,
-            detail=f"Claude SDK timed out after {CLAUDE_TIMEOUT}s. Increase CLAUDE_TIMEOUT env var for longer requests.",
+            detail=(
+                f"Claude SDK timed out after {CLAUDE_TIMEOUT}s. "
+                "Increase CLAUDE_TIMEOUT env var for longer requests."
+            ),
             request_id=request_id,
         )
     except HTTPException:
@@ -1023,9 +1058,13 @@ async def stream_claude_sdk(
     from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
     resolved_model = resolve_model(model)
-    dashboard_state.request_started(request_id, model, api_key=session_logger.api_key, messages=messages)
+    dashboard_state.request_started(
+        request_id,
+        model,
+        api_key=session_logger.api_key,
+        messages=messages,
+    )
     created = int(time.time())
-    start_time = time.monotonic()
     finish_reason = "stop"
     _dashboard_handled = False  # True once request_completed or request_errored has been called
 
@@ -1069,7 +1108,11 @@ async def stream_claude_sdk(
                                         id=request_id,
                                         created=created,
                                         model=model,
-                                        choices=[StreamChoice(delta=DeltaMessage(content=block.text))],
+                                        choices=[
+                                            StreamChoice(
+                                                delta=DeltaMessage(content=block.text)
+                                            )
+                                        ],
                                     )
                                     yield f"data: {chunk.model_dump_json()}\n\n"
                     elif isinstance(msg, ResultMessage):
@@ -1098,15 +1141,19 @@ async def stream_claude_sdk(
                         id=request_id,
                         created=created,
                         model=model,
-                        choices=[StreamChoice(delta=DeltaMessage(tool_calls=[tool_call]))],
+                        choices=[
+                            StreamChoice(delta=DeltaMessage(tool_calls=[tool_call]))
+                        ],
                     )
                     yield f"data: {chunk.model_dump_json()}\n\n"
-                session_logger.log_chunk(f"[parsed tool_call: {tool_calls[0].function.name}]")
+                session_logger.log_chunk(
+                    f"[parsed tool_call: {tool_calls[0].function.name}]"
+                )
             else:
                 # No tool calls found, stream the buffered text in chunks
                 _CHUNK_SIZE = 100
                 for i in range(0, len(full_text), _CHUNK_SIZE):
-                    text_chunk = full_text[i:i + _CHUNK_SIZE]
+                    text_chunk = full_text[i : i + _CHUNK_SIZE]
                     chunk = ChatCompletionChunk(
                         id=request_id,
                         created=created,
@@ -1120,7 +1167,8 @@ async def stream_claude_sdk(
         logging.info(
             f"[{request_id}] Completed | acquire={session_logger.acquire_ms}ms "
             f"query={session_logger.query_ms}ms total={total_ms}ms "
-            f"tokens={usage_dict.get('prompt_tokens', 0)}in/{usage_dict.get('completion_tokens', 0)}out"
+            f"tokens={usage_dict.get('prompt_tokens', 0)}in/"
+            f"{usage_dict.get('completion_tokens', 0)}out"
         )
         session_logger.log_finish(finish_reason)
         dashboard_state.request_completed(request_id, usage=usage_dict)
@@ -1140,8 +1188,15 @@ async def stream_claude_sdk(
         snap = pool.snapshot()
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
         # Record partial timing if acquire completed before timeout fired
-        if session_logger.acquire_ms is None and acquire_ms is not None and query_start is not None:
-            session_logger.log_timing(acquire_ms, int((time.monotonic() - query_start) * 1000))
+        if (
+            session_logger.acquire_ms is None
+            and acquire_ms is not None
+            and query_start is not None
+        ):
+            session_logger.log_timing(
+                acquire_ms,
+                int((time.monotonic() - query_start) * 1000),
+            )
         session_logger.log_error(
             f"Timeout after {CLAUDE_TIMEOUT}s",
             exception_type="TimeoutError",
@@ -1153,10 +1208,17 @@ async def stream_claude_sdk(
             id=request_id,
             created=created,
             model=model,
-            choices=[StreamChoice(
-                delta=DeltaMessage(content=f"\n\n[Error: Request timed out. Increase CLAUDE_TIMEOUT env var for longer requests.]"),
-                finish_reason=None,
-            )],
+            choices=[
+                StreamChoice(
+                    delta=DeltaMessage(
+                        content=(
+                            "\n\n[Error: Request timed out. Increase CLAUDE_TIMEOUT "
+                            "env var for longer requests.]"
+                        )
+                    ),
+                    finish_reason=None,
+                )
+            ],
         )
         yield f"data: {error_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
@@ -1225,7 +1287,10 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     """
     # Guard: pool must be initialized before handling requests
     if pool is None:
-        raise HTTPException(status_code=503, detail="Service unavailable: server is still initializing")
+        raise HTTPException(
+            status_code=503,
+            detail="Service unavailable: server is still initializing",
+        )
 
     # Validate model early to fail fast (UnsupportedModelError handled by exception handler)
     resolve_model(request.model)
@@ -1239,17 +1304,34 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     prompt = format_messages(request.messages)
     session_logger = SessionLogger(request_id, request.model, api_key=api_key)
     # Serialize messages for dashboard display
-    dash_messages = [{"role": m.role, "content": m.content if isinstance(m.content, str) else str(m.content)} for m in request.messages]
+    dash_messages = [
+        {
+            "role": m.role,
+            "content": m.content if isinstance(m.content, str) else str(m.content),
+        }
+        for m in request.messages
+    ]
 
     if request.stream:
+
         async def stream_with_logging():
             try:
                 async for chunk in stream_claude_sdk(
-                    prompt, request.model, request_id, session_logger, request.tools, messages=dash_messages
+                    prompt,
+                    request.model,
+                    request_id,
+                    session_logger,
+                    request.tools,
+                    messages=dash_messages,
                 ):
                     yield chunk
             finally:
-                session_logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
+                session_logger.write(
+                    request.messages,
+                    request.stream,
+                    request.temperature,
+                    request.max_tokens,
+                )
 
         return StreamingResponse(
             stream_with_logging(),
@@ -1262,9 +1344,20 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         )
 
     try:
-        response = await call_claude_sdk(prompt, request.model, session_logger, request.tools, messages=dash_messages)
+        response = await call_claude_sdk(
+            prompt,
+            request.model,
+            session_logger,
+            request.tools,
+            messages=dash_messages,
+        )
     finally:
-        session_logger.write(request.messages, request.stream, request.temperature, request.max_tokens)
+        session_logger.write(
+            request.messages,
+            request.stream,
+            request.temperature,
+            request.max_tokens,
+        )
 
     response_message = Message(
         role="assistant",
@@ -1329,12 +1422,31 @@ def _print_banner(port: int, workers: int, model: str, timeout: int) -> None:
 def main():
     """Entry point for CLI."""
     import argparse
+
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Claude Code Bridge - OpenAI-compatible API for Claude")
-    parser.add_argument("-v", "--version", action="version", version=f"claudebridge {get_version()}")
-    parser.add_argument("-w", "--workers", type=int, default=1, help="Number of pooled clients (default: 1)")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8082)), help="Server port (default: 8082)")
+    parser = argparse.ArgumentParser(
+        description="Claude Code Bridge - OpenAI-compatible API for Claude"
+    )
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"claudebridge {get_version()}",
+    )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of pooled clients (default: 1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("PORT", 8082)),
+        help="Server port (default: 8082)",
+    )
     args = parser.parse_args()
 
     timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))

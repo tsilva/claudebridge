@@ -24,9 +24,25 @@ logger = logging.getLogger(__name__)
 class _ActiveRequest:
     """Tracks a single in-flight request."""
 
-    __slots__ = ("request_id", "model", "api_key", "start_time", "status", "chunks_received", "messages", "buffered_text", "_subscribers")
+    __slots__ = (
+        "request_id",
+        "model",
+        "api_key",
+        "start_time",
+        "status",
+        "chunks_received",
+        "messages",
+        "buffered_text",
+        "_subscribers",
+    )
 
-    def __init__(self, request_id: str, model: str, api_key: str | None = None, messages: list[dict] | None = None):
+    def __init__(
+        self,
+        request_id: str,
+        model: str,
+        api_key: str | None = None,
+        messages: list[dict] | None = None,
+    ):
         self.request_id = request_id
         self.model = model
         self.api_key = api_key
@@ -87,8 +103,19 @@ class DashboardState:
         except asyncio.TimeoutError:
             pass
 
-    def request_started(self, request_id: str, model: str, api_key: str | None = None, messages: list[dict] | None = None) -> None:
-        self._active[request_id] = _ActiveRequest(request_id, model, api_key=api_key, messages=messages)
+    def request_started(
+        self,
+        request_id: str,
+        model: str,
+        api_key: str | None = None,
+        messages: list[dict] | None = None,
+    ) -> None:
+        self._active[request_id] = _ActiveRequest(
+            request_id,
+            model,
+            api_key=api_key,
+            messages=messages,
+        )
         self._notify()
 
     def chunk_received(self, request_id: str, text: str) -> None:
@@ -169,6 +196,13 @@ def _mask_api_key(api_key: str | None) -> str:
     if len(api_key) <= 4:
         return "***"
     return api_key[:4] + "***"
+
+
+def _sse_data_lines(text: str) -> str:
+    """Return text formatted as SSE data lines."""
+    if "\n" in text:
+        return "\n".join(f"data: {line}" for line in text.splitlines())
+    return f"data: {text}"
 
 
 TEMPLATES_DIR = Path(__file__).parent / "templates" / "dashboard"
@@ -452,8 +486,7 @@ def create_dashboard_router(
                             .replace("<", "&lt;")
                             .replace(">", "&gt;")
                         )
-                        # SSE multi-line: prefix each line with "data: "
-                        data_lines = "\n".join(f"data: {l}" for l in escaped.splitlines()) if "\n" in escaped else f"data: {escaped}"
+                        data_lines = _sse_data_lines(escaped)
                         yield f"event: chunk\n{data_lines}\n\n"
                     elif msg["type"] == "done":
                         yield "event: done\ndata: complete\n\n"
@@ -465,7 +498,7 @@ def create_dashboard_router(
                             .replace("<", "&lt;")
                             .replace(">", "&gt;")
                         )
-                        data_lines = "\n".join(f"data: {l}" for l in escaped_err.splitlines()) if "\n" in escaped_err else f"data: {escaped_err}"
+                        data_lines = _sse_data_lines(escaped_err)
                         yield f"event: error\n{data_lines}\n\n"
                         return
             finally:

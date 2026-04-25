@@ -14,22 +14,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from claudebridge.models import (
+    FunctionDefinition,
+    ImageUrl,
+    ImageUrlContent,
     Message,
     TextContent,
-    ImageUrlContent,
-    ImageUrl,
     Tool,
-    FunctionDefinition,
 )
 from claudebridge.server import (
-    format_messages,
-    format_multimodal_messages,
-    build_tool_prompt,
-    parse_tool_response,
     ClaudeResponse,
     app,
+    build_tool_prompt,
+    extract_text_from_content,
+    format_messages,
+    format_multimodal_messages,
+    parse_tool_response,
 )
-from claudebridge.server import extract_text_from_content
 
 
 @pytest.mark.unit
@@ -280,7 +280,7 @@ class TestClaudeResponse:
 
     def test_response_with_tool_calls(self):
         """Response with tool calls."""
-        from claudebridge.models import ToolCall, FunctionCall
+        from claudebridge.models import FunctionCall, ToolCall
 
         resp = ClaudeResponse()
         resp.tool_calls = [
@@ -392,6 +392,12 @@ def test_client():
     with patch("claudebridge.server.pool") as mock_pool:
         # Create a mock that can be used with async context manager
         mock_client = AsyncMock()
+
+        async def receive_response():
+            if False:
+                yield None
+
+        mock_client.receive_response = receive_response
         mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
         yield TestClient(app, raise_server_exceptions=False)
@@ -469,7 +475,7 @@ class TestChatCompletionsValidation:
     def test_empty_messages_accepted(self, test_client):
         """Empty messages list is accepted by Pydantic but may fail later."""
         # Note: This tests Pydantic validation, not business logic
-        response = test_client.post(
+        test_client.post(
             "/api/v1/chat/completions",
             json={"model": "sonnet", "messages": []},
         )

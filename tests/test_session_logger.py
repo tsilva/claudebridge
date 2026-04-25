@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claudebridge.server import SessionLogger, MAX_LOG_FILES
 from claudebridge.models import Message
+from claudebridge.server import SessionLogger
 
 
 @pytest.mark.unit
@@ -26,7 +26,7 @@ class TestSessionLoggerInit:
         log_dir = tmp_path / "test_logs" / "sessions"
         os.environ["LOG_DIR"] = str(log_dir)
         try:
-            logger = SessionLogger("test-123", "sonnet")
+            SessionLogger("test-123", "sonnet")
             assert log_dir.exists()
         finally:
             del os.environ["LOG_DIR"]

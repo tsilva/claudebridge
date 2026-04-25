@@ -75,11 +75,25 @@ async def run_request(
         await complete_messages(client, base_url, messages, model=model, stream=stream)
         elapsed = time.monotonic() - t0
         print(f"{tag} DONE   {kind:<12} {mode:<10} {model}  {elapsed:.1f}s")
-        return {"index": index, "kind": kind, "model": model, "stream": stream, "elapsed": elapsed, "status": "ok"}
+        return {
+            "index": index,
+            "kind": kind,
+            "model": model,
+            "stream": stream,
+            "elapsed": elapsed,
+            "status": "ok",
+        }
     except Exception as e:
         elapsed = time.monotonic() - t0
         print(f"{tag} FAIL   {kind:<12} {mode:<10} {model}  {elapsed:.1f}s  {e}")
-        return {"index": index, "kind": kind, "model": model, "stream": stream, "elapsed": elapsed, "status": str(e)}
+        return {
+            "index": index,
+            "kind": kind,
+            "model": model,
+            "stream": stream,
+            "elapsed": elapsed,
+            "status": str(e),
+        }
 
 
 async def main(count: int, models: list[str], url: str) -> None:
@@ -150,8 +164,25 @@ async def main(count: int, models: list[str], url: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Dashboard load test")
-    parser.add_argument("--count", "-n", type=int, default=5, help="Number of requests (default: 5)")
-    parser.add_argument("--models", "-m", nargs="+", default=MODELS, help="Models to cycle through (default: sonnet haiku opus)")
-    parser.add_argument("--url", "-u", default="http://localhost:8082/api", help="Server URL (default: http://localhost:8082/api)")
+    parser.add_argument(
+        "--count",
+        "-n",
+        type=int,
+        default=5,
+        help="Number of requests (default: 5)",
+    )
+    parser.add_argument(
+        "--models",
+        "-m",
+        nargs="+",
+        default=MODELS,
+        help="Models to cycle through (default: sonnet haiku opus)",
+    )
+    parser.add_argument(
+        "--url",
+        "-u",
+        default="http://localhost:8082/api",
+        help="Server URL (default: http://localhost:8082/api)",
+    )
     args = parser.parse_args()
     asyncio.run(main(args.count, args.models, args.url))
