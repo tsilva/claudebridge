@@ -32,9 +32,10 @@ jobs:
         uses: tsilva/.github/.github/actions/check-version@main
       - name: Setup uv
         if: steps.check-version.outputs.tag_exists == 'false'
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v5
         with:
-          cache: true
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
       - name: Build package
         if: steps.check-version.outputs.tag_exists == 'false'
         run: uv build
