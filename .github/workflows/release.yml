@@ -1,12 +1,41 @@
 name: Release
 on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the current pyproject version if it is not already tagged
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
-    paths: [pyproject.toml]
+    paths:
+      - pyproject.toml
+      - .github/workflows/release.yml
 concurrency:
   group: release
   cancel-in-progress: false
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ steps.publish.outputs.should-publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether to publish
+        id: publish
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should-publish=${{ inputs.publish }}" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep -qx "pyproject.toml"; then
+            echo "should-publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     uses: tsilva/.github/.github/workflows/test.yml@main
     with:
@@ -16,7 +45,8 @@ jobs:
     uses: tsilva/.github/.github/workflows/pii-scan.yml@main
 
   publish:
-    needs: [test, pii-scan]
+    needs: [changes, test, pii-scan]
+    if: needs.changes.outputs.should-publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi
