@@ -42,7 +42,13 @@ jobs:
       pytest-args: "tests/ -m unit -v --tb=short"
 
   pii-scan:
-    uses: tsilva/.github/.github/workflows/pii-scan.yml@main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
 
   publish:
     needs: [changes, test, pii-scan]
