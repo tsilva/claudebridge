@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from claudebridge.dashboard import (
+from agentbridge.dashboard import (
     DashboardState,
     _ActiveRequest,
     _get_recent_logs,
@@ -363,14 +363,14 @@ class TestGetRecentLogs:
 class TestDashboardPage:
     """Tests for GET /dashboard."""
 
-    def test_returns_html_with_claudebridge(self):
-        """Dashboard page returns HTML containing 'claudebridge'."""
+    def test_returns_html_with_agentbridge(self):
+        """Dashboard page returns HTML containing 'agentbridge'."""
         app = _make_app()
         client = TestClient(app)
         resp = client.get("/dashboard")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
-        assert "claudebridge" in resp.text
+        assert "agentbridge" in resp.text
 
 
 @pytest.mark.unit

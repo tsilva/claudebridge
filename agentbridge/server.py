@@ -566,7 +566,7 @@ async def lifespan(app: FastAPI):
     await pool.shutdown()
 
 
-app = FastAPI(title="Claude Code Bridge", version=__version__, lifespan=lifespan)
+app = FastAPI(title="AgentBridge", version=__version__, lifespan=lifespan)
 
 app.include_router(
     create_dashboard_router(
@@ -1411,7 +1411,7 @@ def _print_banner(port: int, workers: int, model: str, timeout: int) -> None:
     print(f"\n  {_CLAUDE}   ╭───╮       ╭───╮{_RESET}")
     print(f"  {_CLAUDE}═══╯   ╰═══════╯   ╰═══{_RESET}")
     print(f"  {_CLAUDE_DIM}   │   │       │   │{_RESET}")
-    print(f"  {_BOLD}{_CLAUDE}claudebridge{_RESET} {_DIM}v{version}{_RESET}\n")
+    print(f"  {_BOLD}{_CLAUDE}agentbridge{_RESET} {_DIM}v{version}{_RESET}\n")
     print(f"  {_DIM}Dashboard{_RESET}  {_CLAUDE}http://127.0.0.1:{port}/dashboard{_RESET}")
     print(f"  {_DIM}API{_RESET}        {_CLAUDE}http://127.0.0.1:{port}/api/v1{_RESET}")
     print(f"  {_DIM}Workers{_RESET}    {_BOLD}{workers}{_RESET} {_DIM}({model}){_RESET}")
@@ -1426,13 +1426,13 @@ def main():
     import uvicorn
 
     parser = argparse.ArgumentParser(
-        description="Claude Code Bridge - OpenAI-compatible API for Claude"
+        description="AgentBridge - OpenAI-compatible API for Claude"
     )
     parser.add_argument(
         "-v",
         "--version",
         action="version",
-        version=f"claudebridge {get_version()}",
+        version=f"agentbridge {get_version()}",
     )
     parser.add_argument(
         "-w",

@@ -2,7 +2,7 @@
 
 ## Context
 
-claudebridge users need visibility into what the server is doing - active requests, pool state, streaming progress, and request history with full conversation logs. This is a single-user local debugging tool, not production monitoring.
+agentbridge users need visibility into what the server is doing - active requests, pool state, streaming progress, and request history with full conversation logs. This is a single-user local debugging tool, not production monitoring.
 
 ## Approach
 
@@ -26,7 +26,7 @@ htmx + Jinja2 server-rendered dashboard at `/dashboard`. No JS to write, no buil
 
 ```
 +---------------------------------------------+
-|  claudebridge dashboard          [pool: 2/3]|
+|  agentbridge dashboard          [pool: 2/3]|
 +----------------------+----------------------+
 |  Active Requests     |  Request Detail      |
 |  - req-abc  sonnet   |                      |
@@ -49,7 +49,7 @@ htmx + Jinja2 server-rendered dashboard at `/dashboard`. No JS to write, no buil
 ## File Structure
 
 ```
-claudebridge/
+agentbridge/
   dashboard_state.py      # ~40 lines - active request tracking + token queues
   dashboard_routes.py     # ~80 lines - FastAPI routes
   templates/dashboard/
@@ -95,7 +95,7 @@ claudebridge/
 
 ## Verification
 
-1. Start server: `claudebridge`
+1. Start server: `agentbridge`
 2. Open `http://localhost:8082/dashboard`
 3. Send a request via curl/client - verify it appears in active requests
 4. Watch tokens stream live in detail panel

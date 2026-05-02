@@ -1,4 +1,4 @@
-# claudebridge
+# agentbridge
 
 Bridge OpenAI tools to Claude Code SDK. Uses your active Claude subscription.
 
@@ -6,7 +6,7 @@ Bridge OpenAI tools to Claude Code SDK. Uses your active Claude subscription.
 
 ```bash
 uv pip install -e .
-claudebridge
+agentbridge
 ```
 
 ## Endpoints
@@ -37,7 +37,7 @@ Unsupported model IDs return HTTP 400 with an error message listing valid option
 ## Architecture
 
 ```
-claudebridge/
+agentbridge/
 ├── server.py         # FastAPI app, endpoints, Claude SDK integration, model mapping, session logging
 ├── pool.py           # Dynamic client pool with model replacement
 ├── models.py         # Pydantic models for OpenAI request/response format and model mapping

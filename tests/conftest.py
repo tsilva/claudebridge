@@ -1,4 +1,4 @@
-"""Pytest configuration for claudebridge tests."""
+"""Pytest configuration for agentbridge tests."""
 
 import os
 from pathlib import Path
@@ -55,12 +55,12 @@ def pytest_collection_modifyitems(config, items):
         if response.status_code != 200 or response.json().get("status") != "ok":
             pytest.exit(
                 f"\n\nServer not responding correctly at {SERVER_URL}\n"
-                f"Start the server with: claudebridge\n",
+                f"Start the server with: agentbridge\n",
                 returncode=1
             )
     except (httpx.ConnectError, httpx.TimeoutException):
         pytest.exit(
             f"\n\nServer not available at {SERVER_URL}\n"
-            f"Start the server with: claudebridge\n",
+            f"Start the server with: agentbridge\n",
             returncode=1
         )

@@ -9,7 +9,7 @@ Usage:
 
 import pytest
 
-from claudebridge.models import (
+from agentbridge.models import (
     AVAILABLE_MODELS,
     SIMPLE_NAMES,
     UnsupportedModelError,

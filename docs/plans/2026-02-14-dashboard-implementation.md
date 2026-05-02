@@ -48,7 +48,7 @@ git commit -m "feat(dashboard): add jinja2 dependency"
 ### Task 2: Create dashboard_state.py with tests
 
 **Files:**
-- Create: `claudebridge/dashboard_state.py`
+- Create: `agentbridge/dashboard_state.py`
 - Create: `tests/test_dashboard_state.py`
 
 **Step 1: Write the tests**
@@ -58,7 +58,7 @@ git commit -m "feat(dashboard): add jinja2 dependency"
 
 import asyncio
 import pytest
-from claudebridge.dashboard_state import DashboardState
+from agentbridge.dashboard_state import DashboardState
 
 
 @pytest.fixture
@@ -282,7 +282,7 @@ Expected: All tests PASS
 **Step 5: Commit**
 
 ```bash
-git add claudebridge/dashboard_state.py tests/test_dashboard_state.py
+git add agentbridge/dashboard_state.py tests/test_dashboard_state.py
 git commit -m "feat(dashboard): add in-memory state tracking with fan-out subscriptions"
 ```
 
@@ -291,7 +291,7 @@ git commit -m "feat(dashboard): add in-memory state tracking with fan-out subscr
 ### Task 3: Wire dashboard_state into server.py
 
 **Files:**
-- Modify: `claudebridge/server.py:73-93` (lifespan), `server.py:378-474` (call_claude_sdk), `server.py:477-644` (stream_claude_sdk)
+- Modify: `agentbridge/server.py:73-93` (lifespan), `server.py:378-474` (call_claude_sdk), `server.py:477-644` (stream_claude_sdk)
 
 **Step 1: Write integration tests**
 
@@ -301,8 +301,8 @@ Create `tests/test_dashboard_integration.py`:
 """Tests for dashboard state integration with server functions."""
 
 import pytest
-from claudebridge.dashboard_state import DashboardState
-from claudebridge.server import dashboard_state
+from agentbridge.dashboard_state import DashboardState
+from agentbridge.server import dashboard_state
 
 
 @pytest.mark.unit
@@ -397,7 +397,7 @@ Expected: All existing tests still pass
 **Step 6: Commit**
 
 ```bash
-git add claudebridge/server.py tests/test_dashboard_integration.py
+git add agentbridge/server.py tests/test_dashboard_integration.py
 git commit -m "feat(dashboard): wire state tracking hooks into request lifecycle"
 ```
 
@@ -406,12 +406,12 @@ git commit -m "feat(dashboard): wire state tracking hooks into request lifecycle
 ### Task 4: Create dashboard templates
 
 **Files:**
-- Create: `claudebridge/templates/dashboard/page.html`
-- Create: `claudebridge/templates/dashboard/active.html`
-- Create: `claudebridge/templates/dashboard/recent.html`
-- Create: `claudebridge/templates/dashboard/detail.html`
-- Create: `claudebridge/templates/dashboard/pool.html`
-- Create: `claudebridge/templates/dashboard/stream.html`
+- Create: `agentbridge/templates/dashboard/page.html`
+- Create: `agentbridge/templates/dashboard/active.html`
+- Create: `agentbridge/templates/dashboard/recent.html`
+- Create: `agentbridge/templates/dashboard/detail.html`
+- Create: `agentbridge/templates/dashboard/pool.html`
+- Create: `agentbridge/templates/dashboard/stream.html`
 
 **Step 1: Create `page.html` — base layout**
 
@@ -421,7 +421,7 @@ git commit -m "feat(dashboard): wire state tracking hooks into request lifecycle
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>claudebridge dashboard</title>
+    <title>agentbridge dashboard</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.3.0/sse.js"></script>
@@ -454,7 +454,7 @@ git commit -m "feat(dashboard): wire state tracking hooks into request lifecycle
 </head>
 <body>
     <header>
-        <h1>claudebridge</h1>
+        <h1>agentbridge</h1>
         <div hx-get="/dashboard/pool" hx-trigger="load, every 3s" hx-swap="innerHTML"></div>
     </header>
     <div class="dashboard">
@@ -576,7 +576,7 @@ This is a minimal SSE data fragment. The actual SSE event format is `event: chun
 **Step 7: Commit**
 
 ```bash
-git add claudebridge/templates/
+git add agentbridge/templates/
 git commit -m "feat(dashboard): add htmx + Pico CSS templates"
 ```
 
@@ -585,7 +585,7 @@ git commit -m "feat(dashboard): add htmx + Pico CSS templates"
 ### Task 5: Create dashboard_routes.py with tests
 
 **Files:**
-- Create: `claudebridge/dashboard_routes.py`
+- Create: `agentbridge/dashboard_routes.py`
 - Create: `tests/test_dashboard_routes.py`
 
 **Step 1: Write the tests**
@@ -599,8 +599,8 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
-from claudebridge.dashboard_routes import create_dashboard_router
-from claudebridge.dashboard_state import DashboardState
+from agentbridge.dashboard_routes import create_dashboard_router
+from agentbridge.dashboard_state import DashboardState
 
 
 @pytest.fixture
@@ -628,7 +628,7 @@ class TestDashboardPage:
         resp = client.get("/dashboard")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
-        assert "claudebridge" in resp.text
+        assert "agentbridge" in resp.text
 
     def test_pool_endpoint_returns_html(self, client):
         resp = client.get("/dashboard/pool")
@@ -889,7 +889,7 @@ Expected: All tests PASS
 **Step 5: Commit**
 
 ```bash
-git add claudebridge/dashboard_routes.py tests/test_dashboard_routes.py
+git add agentbridge/dashboard_routes.py tests/test_dashboard_routes.py
 git commit -m "feat(dashboard): add FastAPI routes with SSE streaming and log parsing"
 ```
 
@@ -898,7 +898,7 @@ git commit -m "feat(dashboard): add FastAPI routes with SSE streaming and log pa
 ### Task 6: Mount dashboard router in server.py
 
 **Files:**
-- Modify: `claudebridge/server.py:73-95` (lifespan and app setup)
+- Modify: `agentbridge/server.py:73-95` (lifespan and app setup)
 
 **Step 1: Write the test**
 
@@ -910,7 +910,7 @@ class TestDashboardMounted:
     """Verify dashboard routes are mounted on the app."""
 
     def test_dashboard_route_exists(self):
-        from claudebridge.server import app
+        from agentbridge.server import app
         routes = [r.path for r in app.routes if hasattr(r, "path")]
         assert "/dashboard" in routes
 ```
@@ -951,7 +951,7 @@ Expected: All PASS
 **Step 6: Commit**
 
 ```bash
-git add claudebridge/server.py tests/test_dashboard_integration.py
+git add agentbridge/server.py tests/test_dashboard_integration.py
 git commit -m "feat(dashboard): mount dashboard router on main app"
 ```
 
@@ -965,16 +965,16 @@ git commit -m "feat(dashboard): mount dashboard router on main app"
 
 **Step 1: Verify templates are included**
 
-Since we're using hatchling and the templates are inside the `claudebridge/` package directory, they should be included automatically. Verify:
+Since we're using hatchling and the templates are inside the `agentbridge/` package directory, they should be included automatically. Verify:
 
-Run: `python -c "from pathlib import Path; p = Path('claudebridge/templates/dashboard'); print(f'Templates exist: {p.exists()}'); print(list(p.glob('*.html')))"`
+Run: `python -c "from pathlib import Path; p = Path('agentbridge/templates/dashboard'); print(f'Templates exist: {p.exists()}'); print(list(p.glob('*.html')))"`
 Expected: Shows all 6 template files
 
 **Step 2: Ensure hatchling includes non-Python files**
 
 Check if `pyproject.toml` needs a `[tool.hatch.build.targets.wheel]` `artifacts` entry. Hatchling includes all files in the package directory by default, including non-Python files. No change needed unless templates are excluded.
 
-Run: `pip install -e . && python -c "import claudebridge; from pathlib import Path; p = Path(claudebridge.__file__).parent / 'templates' / 'dashboard'; print(list(p.glob('*.html')))"`
+Run: `pip install -e . && python -c "import agentbridge; from pathlib import Path; p = Path(agentbridge.__file__).parent / 'templates' / 'dashboard'; print(list(p.glob('*.html')))"`
 Expected: Lists all template files
 
 **Step 3: Commit (if any changes needed)**
@@ -990,7 +990,7 @@ git commit -m "build: ensure dashboard templates included in wheel"
 
 **Step 1: Start the server**
 
-Run: `claudebridge`
+Run: `agentbridge`
 Expected: Server starts, pool initializes
 
 **Step 2: Open dashboard in browser**

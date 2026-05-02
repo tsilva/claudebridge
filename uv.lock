@@ -585,7 +585,7 @@ wheels = [
 ]
 
 [[package]]
-name = "py-claudebridge"
+name = "py-agentbridge"
 version = "0.1.8"
 source = { editable = "." }
 dependencies = [

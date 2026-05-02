@@ -1,21 +1,21 @@
 <div align="center">
-  <img src="./logo.png" alt="claudebridge" width="512" />
+  <img src="./logo.png" alt="agentbridge" width="512" />
 
   **🌉 Bridge OpenAI tools to Claude Code SDK — use your subscription anywhere 🔌**
 </div>
 
-claudebridge is a local OpenAI-compatible API server for Claude Code SDK. It lets tools that already speak the OpenAI Chat Completions API use your active Claude Code login through `http://localhost:8082/api/v1`.
+agentbridge is a local OpenAI-compatible API server for Claude Code SDK. It lets tools that already speak the OpenAI Chat Completions API use your active Claude Code login through `http://localhost:8082/api/v1`.
 
 It supports non-streaming and streaming chat completions, multimodal image/PDF inputs, OpenRouter-style Claude model slugs, a small live dashboard, and JSON session logs for debugging.
 
-> **Legal notice:** claudebridge uses Claude Code SDK access through your Claude subscription, not the Anthropic API. Whether this is allowed under Anthropic's terms is your responsibility to evaluate. Use it conservatively and at your own risk.
+> **Legal notice:** agentbridge uses Claude Code SDK access through your Claude subscription, not the Anthropic API. Whether this is allowed under Anthropic's terms is your responsibility to evaluate. Use it conservatively and at your own risk.
 
 ## Install
 
 ```bash
-uv tool install py-claudebridge
+uv tool install py-agentbridge
 claude login
-claudebridge
+agentbridge
 ```
 
 Open [http://localhost:8082/dashboard](http://localhost:8082/dashboard), or point an OpenAI-compatible client at `http://localhost:8082/api/v1`.
@@ -23,10 +23,10 @@ Open [http://localhost:8082/dashboard](http://localhost:8082/dashboard), or poin
 Install from source when working on the repo:
 
 ```bash
-git clone https://github.com/tsilva/claudebridge.git
-cd claudebridge
+git clone https://github.com/tsilva/agentbridge.git
+cd agentbridge
 uv pip install -e .
-claudebridge
+agentbridge
 ```
 
 ## Usage
@@ -55,10 +55,10 @@ print(response.choices[0].message.content)
 ## Commands
 
 ```bash
-claudebridge                         # start on http://127.0.0.1:8082
-claudebridge --port 8083             # choose another port
-claudebridge -w 3                    # run with three pooled workers
-claudebridge --version               # print package and git version
+agentbridge                         # start on http://127.0.0.1:8082
+agentbridge --port 8083             # choose another port
+agentbridge -w 3                    # run with three pooled workers
+agentbridge --version               # print package and git version
 uv tool install . --force --no-cache # reinstall local source build
 uv run --extra test pytest -m unit   # run unit tests
 uv run --extra test pytest           # run full tests; integration tests expect a server
@@ -76,7 +76,7 @@ uv run --extra test pytest           # run full tests; integration tests expect 
 
 ## Architecture
 
-![claudebridge architecture diagram](./architecture.png)
+![agentbridge architecture diagram](./architecture.png)
 
 ## License
 

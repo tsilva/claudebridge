@@ -1,6 +1,6 @@
 {
-  "name": "claudebridge",
-  "short_name": "claudebridge",
+  "name": "agentbridge",
+  "short_name": "agentbridge",
   "icons": [
     {
       "src": "android-chrome-192.png",

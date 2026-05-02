@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from claudebridge.models import (
+from agentbridge.models import (
     ChatCompletionChunk,
     # Request models
     ChatCompletionRequest,

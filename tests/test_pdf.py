@@ -1,8 +1,8 @@
 """
-PDF extraction tests for claudebridge.
+PDF extraction tests for agentbridge.
 
 Prerequisites:
-- Server must be running for integration tests: claudebridge
+- Server must be running for integration tests: agentbridge
 - fpdf2 must be installed for PDF fixture generation
 
 Usage:
@@ -12,12 +12,12 @@ Usage:
 
 from pathlib import Path
 
-from claudebridge.models import (
+from agentbridge.models import (
     ImageUrl,
     ImageUrlContent,
     TextContent,
 )
-from claudebridge.server import (
+from agentbridge.server import (
     extract_text_from_content,
     openai_content_to_claude,
     openai_image_to_claude,

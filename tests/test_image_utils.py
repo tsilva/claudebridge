@@ -9,13 +9,13 @@ Usage:
 
 import pytest
 
-from claudebridge.models import (
+from agentbridge.models import (
     ImageUrl,
     ImageUrlContent,
     Message,
     TextContent,
 )
-from claudebridge.server import (
+from agentbridge.server import (
     extract_text_from_content,
     has_multimodal_content,
     is_data_url,

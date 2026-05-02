@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from claudebridge.pool import ClientPool, make_options
+from agentbridge.pool import ClientPool, make_options
 
 
 def _make_mock_client():
@@ -637,7 +637,7 @@ class TestClientPoolRequestIdLogging:
 
             await pool.initialize()
 
-            with caplog.at_level("INFO", logger="claudebridge.pool"):
+            with caplog.at_level("INFO", logger="agentbridge.pool"):
                 async with pool.acquire("opus", request_id="chatcmpl-test123"):
                     pass
 

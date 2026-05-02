@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from claudebridge.models import Message
-from claudebridge.server import SessionLogger
+from agentbridge.models import Message
+from agentbridge.server import SessionLogger
 
 
 @pytest.mark.unit
@@ -246,7 +246,7 @@ class TestSessionLoggerCleanup:
             p.write_text(json.dumps({"request_id": f"old-{i}"}))
             os.utime(p, (time.time() - 100 + i, time.time() - 100 + i))
 
-        with patch("claudebridge.server.MAX_LOG_FILES", 3):
+        with patch("agentbridge.server.MAX_LOG_FILES", 3):
             logger = SessionLogger("test-cleanup", "sonnet")
             logger.log_chunk("Response")
             logger.log_finish("stop")
@@ -266,7 +266,7 @@ class TestSessionLoggerCleanup:
                 json.dumps({"request_id": f"existing-{i}"})
             )
 
-        with patch("claudebridge.server.MAX_LOG_FILES", 100):
+        with patch("agentbridge.server.MAX_LOG_FILES", 100):
             logger = SessionLogger("test-no-cleanup", "sonnet")
             logger.log_chunk("Response")
             logger.log_finish("stop")
