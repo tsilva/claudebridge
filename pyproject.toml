@@ -1,12 +1,12 @@
 [project]
-name = "py-agentbridge"
+name = "agentbridge-py"
 version = "0.1.8"
-description = "Bridge OpenAI tools to Claude Code SDK"
+description = "Bridge OpenAI tools to Claude Code SDK and Codex CLI"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "tsilva"}]
 requires-python = ">=3.12"
-keywords = ["claude", "openai", "api", "bridge", "llm", "anthropic", "claude-code", "fastapi", "streaming"]
+keywords = ["claude", "codex", "openai", "api", "bridge", "llm", "anthropic", "claude-code", "fastapi", "streaming"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

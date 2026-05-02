@@ -11,9 +11,11 @@ import pytest
 
 from agentbridge.models import (
     AVAILABLE_MODELS,
+    CODEX_MODEL_SLUGS,
     SIMPLE_NAMES,
     UnsupportedModelError,
     resolve_model,
+    resolve_model_request,
 )
 
 
@@ -107,6 +109,36 @@ class TestOpenRouterSlugs:
 
 
 @pytest.mark.unit
+class TestCodexModels:
+    """Tests for Codex model routing."""
+
+    def test_resolve_codex_alias(self):
+        """Bare codex routes to Codex with CLI default model."""
+        result = resolve_model_request("codex")
+        assert result.provider == "codex"
+        assert result.model is None
+        assert resolve_model("codex") == "codex"
+
+    def test_resolve_openai_codex_slug(self):
+        """OpenAI-style Codex slug resolves to Codex provider."""
+        result = resolve_model_request("openai/gpt-5.3-codex")
+        assert result.provider == "codex"
+        assert result.model == "gpt-5.3-codex"
+
+    def test_resolve_bare_gpt5_model(self):
+        """Bare gpt-5 model IDs route to Codex."""
+        result = resolve_model_request("gpt-5.4-mini")
+        assert result.provider == "codex"
+        assert result.model == "gpt-5.4-mini"
+
+    def test_resolve_codex_provider_prefix(self):
+        """codex/<model> prefix routes to Codex."""
+        result = resolve_model_request("codex/gpt-5.5")
+        assert result.provider == "codex"
+        assert result.model == "gpt-5.5"
+
+
+@pytest.mark.unit
 class TestUnsupportedModels:
     """Tests for unsupported model error handling."""
 
@@ -158,18 +190,20 @@ class TestMappingConsistency:
         assert len(SIMPLE_NAMES) == 3
 
     def test_available_models_have_slugs(self):
-        """Available models list contains one entry per model family."""
-        assert len(AVAILABLE_MODELS) == len(SIMPLE_NAMES)
+        """Available models list contains Claude and Codex entries."""
         slugs = {m["slug"] for m in AVAILABLE_MODELS}
         for name in SIMPLE_NAMES:
             assert f"anthropic/claude-{name}" in slugs
+        assert "codex" in slugs
+        for name in CODEX_MODEL_SLUGS:
+            assert f"openai/{name}" in slugs
 
     def test_available_models_format(self):
         """Available models have expected format and are resolvable."""
         for model in AVAILABLE_MODELS:
-            assert model["slug"].startswith("anthropic/claude-")
-            assert "Claude" in model["name"]
-            assert resolve_model(model["slug"]) in SIMPLE_NAMES
+            assert model["slug"]
+            assert model["name"]
+            assert resolve_model_request(model["slug"]).provider in {"claude", "codex"}
 
 
 @pytest.mark.unit

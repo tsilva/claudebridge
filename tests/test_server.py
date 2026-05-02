@@ -8,6 +8,7 @@ Usage:
 """
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -23,6 +24,8 @@ from agentbridge.models import (
 )
 from agentbridge.server import (
     ClaudeResponse,
+    _build_codex_command,
+    _parse_codex_json_lines,
     app,
     build_tool_prompt,
     extract_text_from_content,
@@ -320,6 +323,53 @@ class TestClaudeResponse:
 
 
 @pytest.mark.unit
+class TestCodexHelpers:
+    """Tests for Codex CLI helper functions."""
+
+    def test_build_codex_command_puts_global_options_before_exec(self):
+        """Codex global approval policy must appear before the exec subcommand."""
+        with patch("agentbridge.server._codex_binary", return_value="/bin/codex"):
+            cmd = _build_codex_command(
+                "gpt-5.4-mini",
+                Path("/tmp/work"),
+                Path("/tmp/work/out.txt"),
+                [Path("/tmp/work/image.png")],
+            )
+
+        assert cmd[:4] == ["/bin/codex", "-a", "never", "exec"]
+        assert cmd[-1] == "-"
+        image_arg_index = cmd.index("--image")
+        assert cmd[image_arg_index + 1] == "/tmp/work/image.png"
+
+    def test_parse_codex_json_lines_extracts_assistant_text_and_usage(self):
+        """Codex JSONL parser handles assistant item and usage events."""
+        output = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "id": "abc"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "assistant_message",
+                            "content": [{"type": "text", "text": "hello"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 3, "output_tokens": 2},
+                    }
+                ),
+            ]
+        )
+
+        text, usage = _parse_codex_json_lines(output)
+        assert text == "hello"
+        assert usage == {"input_tokens": 3, "output_tokens": 2}
+
+
+@pytest.mark.unit
 class TestFormatMultimodalMessages:
     """Tests for format_multimodal_messages function."""
 
@@ -429,11 +479,14 @@ class TestModelsEndpoint:
         assert len(data["data"]) > 0
 
     def test_models_have_openrouter_format(self, test_client):
-        """Models have OpenRouter-style slugs."""
+        """Models include Claude and Codex slugs."""
         response = test_client.get("/api/v1/models")
         data = response.json()
+        ids = {model["id"] for model in data["data"]}
+        assert "codex" in ids
+        assert any(model_id.startswith("anthropic/claude-") for model_id in ids)
+        assert any(model_id.startswith("openai/") for model_id in ids)
         for model in data["data"]:
-            assert model["id"].startswith("anthropic/claude-")
             assert model["object"] == "model"
 
 

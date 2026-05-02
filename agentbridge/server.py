@@ -1,4 +1,4 @@
-"""FastAPI server exposing Claude Code SDK as OpenAI-compatible API."""
+"""FastAPI server exposing Claude Code SDK and Codex CLI as an OpenAI-compatible API."""
 
 import asyncio
 import base64
@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import time
 import traceback
 import urllib.parse
@@ -45,6 +46,7 @@ from .models import (
     UnsupportedModelError,
     Usage,
     resolve_model,
+    resolve_model_request,
 )
 from .pool import ClientPool
 
@@ -516,14 +518,17 @@ class SessionLogger:
             logging.warning(f"[session_logger] Log cleanup failed: {e}")
 
 
-# Pool configuration
+# Runtime configuration
 pool: ClientPool | None = None
+_pool_lock: asyncio.Lock | None = None
+_pool_size = 1
+codex_semaphore: asyncio.Semaphore | None = None
 dashboard_state = DashboardState()
 
 # Track which unsupported parameter warnings have been shown (log once per param)
 _warned_params: set[str] = set()
 
-# Parameters accepted for compatibility but not supported by Claude SDK
+# Parameters accepted for compatibility but not supported by provider adapters
 _UNSUPPORTED_PARAMS = {
     "temperature", "top_p", "frequency_penalty", "presence_penalty",
     "stop", "n", "seed", "response_format", "logit_bias", "logprobs",
@@ -540,30 +545,51 @@ def _warn_unsupported_params(request: "ChatCompletionRequest") -> None:
             if value is not None:
                 _warned_params.add(param)
                 logging.warning(
-                    f"Parameter '{param}' is accepted but not supported by Claude SDK "
+                    f"Parameter '{param}' is accepted but not supported by AgentBridge "
                     "— value ignored"
                 )
 
 
+async def ensure_claude_pool() -> ClientPool:
+    """Create the Claude client pool on demand."""
+    global pool, _pool_lock
+    if pool is not None:
+        return pool
+    if _pool_lock is None:
+        _pool_lock = asyncio.Lock()
+    async with _pool_lock:
+        if pool is not None:
+            return pool
+        new_pool = ClientPool(
+            size=_pool_size,
+            default_model="opus",
+            on_change=dashboard_state.notify_pool_change,
+        )
+        await new_pool.initialize()
+        pool = new_pool
+        return new_pool
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application lifespan - initialize and shutdown pool."""
-    global pool
-    pool_size = int(os.environ.get("POOL_SIZE", 1))
+    """Manage application lifespan - initialize and shutdown provider resources."""
+    global pool, _pool_lock, _pool_size, codex_semaphore
+    _pool_size = int(os.environ.get("POOL_SIZE", 1))
+    _pool_lock = asyncio.Lock()
+    codex_semaphore = asyncio.Semaphore(_pool_size)
 
-    pool = ClientPool(
-        size=pool_size,
-        default_model="opus",
-        on_change=dashboard_state.notify_pool_change,
-    )
-    try:
-        await pool.initialize()
-    except Exception as e:
-        logging.error(f"Failed to initialize pool: {e}")
-        raise
+    if os.environ.get("AGENTBRIDGE_PREWARM_CLAUDE", "1") != "0":
+        try:
+            await ensure_claude_pool()
+        except Exception as e:
+            logging.warning(
+                f"Claude pool pre-warm failed; Codex requests can still run: {e}"
+            )
 
     yield
-    await pool.shutdown()
+    if pool is not None:
+        await pool.shutdown()
+        pool = None
 
 
 app = FastAPI(title="AgentBridge", version=__version__, lifespan=lifespan)
@@ -577,8 +603,11 @@ app.include_router(
     )
 )
 
-# Timeout for Claude SDK calls (in seconds)
+# Timeout for provider calls (in seconds)
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
+CODEX_TIMEOUT = int(
+    os.environ.get("CODEX_TIMEOUT", os.environ.get("CLAUDE_TIMEOUT", 120))
+)
 
 
 class BridgeHTTPException(HTTPException):
@@ -764,10 +793,10 @@ def make_multimodal_prompt(content_blocks: list[dict]):
 
 
 def build_tool_prompt(tools: list[Tool]) -> str:
-    """Build a prompt suffix that instructs Claude to respond with JSON matching the tool schema.
+    """Build a prompt suffix that asks the model for JSON matching the tool schema.
 
-    Since the Claude Agent SDK doesn't support custom function calling, we emulate it
-    by including the schema in the prompt and asking for JSON output.
+    Provider adapters do not expose custom OpenAI-style function calling, so this
+    emulates it by including the schema in the prompt and asking for JSON output.
     """
     if len(tools) == 1:
         schema = tools[0].function.parameters or {}
@@ -889,6 +918,329 @@ class ClaudeResponse:
         }
 
 
+def _get_codex_semaphore() -> asyncio.Semaphore:
+    """Return the process limit semaphore, creating it for tests without lifespan."""
+    global codex_semaphore
+    if codex_semaphore is None:
+        codex_semaphore = asyncio.Semaphore(_pool_size)
+    return codex_semaphore
+
+
+def _codex_binary() -> str:
+    """Return configured Codex executable path."""
+    codex_bin = os.environ.get("CODEX_BIN") or shutil.which("codex")
+    if not codex_bin:
+        raise RuntimeError("Codex CLI not found. Install Codex or set CODEX_BIN.")
+    return codex_bin
+
+
+def _codex_text_from_content(content: Any) -> str:
+    """Extract assistant text from flexible Codex JSON event content."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict):
+            block_type = str(block.get("type", ""))
+            if block_type in {"text", "output_text", "assistant_message"}:
+                text = block.get("text") or block.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+            elif "text" in block and isinstance(block["text"], str):
+                parts.append(block["text"])
+    return "".join(parts)
+
+
+def _codex_container_is_assistant(container: dict[str, Any]) -> bool:
+    """Return whether a JSON event/container looks like assistant output."""
+    role = container.get("role")
+    item_type = str(container.get("type", ""))
+    return role == "assistant" or "assistant" in item_type or item_type == "output_text"
+
+
+def _codex_event_error(event: dict[str, Any]) -> str | None:
+    """Extract an error string from a Codex JSON event if present."""
+    event_type = str(event.get("type", ""))
+    if event_type in {"error", "turn.failed"} or event_type.endswith(".failed"):
+        error = event.get("error") or event.get("message") or event.get("reason")
+        if isinstance(error, dict):
+            return str(error.get("message") or error)
+        if error:
+            return str(error)
+    error = event.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error)
+    if isinstance(error, str):
+        return error
+    return None
+
+
+def _codex_event_usage(event: dict[str, Any]) -> dict[str, int] | None:
+    """Extract token usage from known Codex event shapes."""
+    candidates = [event, event.get("usage"), event.get("turn"), event.get("response")]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        usage = candidate.get("usage") if isinstance(candidate.get("usage"), dict) else candidate
+        if not isinstance(usage, dict):
+            continue
+        input_tokens = usage.get("input_tokens", usage.get("prompt_tokens"))
+        output_tokens = usage.get("output_tokens", usage.get("completion_tokens"))
+        if input_tokens is not None or output_tokens is not None:
+            return {
+                "input_tokens": int(input_tokens or 0),
+                "output_tokens": int(output_tokens or 0),
+            }
+    return None
+
+
+def _codex_event_text_delta(
+    event: dict[str, Any],
+    current_text: str,
+) -> tuple[str, str]:
+    """Return newly available assistant text and the updated full text."""
+    containers = [event]
+    for key in ("item", "message", "response", "delta"):
+        value = event.get(key)
+        if isinstance(value, dict):
+            containers.append(value)
+
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in ("text_delta", "content_delta", "output_text_delta", "delta"):
+            value = container.get(key)
+            if isinstance(value, str) and value:
+                return value, current_text + value
+
+    full_candidates: list[str] = []
+    for container in containers:
+        if not isinstance(container, dict) or not _codex_container_is_assistant(container):
+            continue
+        for key in ("text", "output_text", "content"):
+            text = _codex_text_from_content(container.get(key))
+            if text:
+                full_candidates.append(text)
+
+    if not full_candidates:
+        return "", current_text
+
+    full_text = max(full_candidates, key=len)
+    if full_text.startswith(current_text):
+        return full_text[len(current_text):], full_text
+    if full_text and full_text not in current_text:
+        return full_text, current_text + full_text
+    return "", current_text
+
+
+def _prepare_codex_prompt(
+    prompt: str | list[dict],
+    work_dir: Path,
+) -> tuple[str, list[Path]]:
+    """Convert formatted prompt blocks into Codex stdin text and image files."""
+    if isinstance(prompt, str):
+        return prompt, []
+
+    text_parts: list[str] = []
+    image_paths: list[Path] = []
+    attachment_index = 0
+
+    for block in prompt:
+        block_type = block.get("type")
+        if block_type == "text":
+            text_parts.append(str(block.get("text", "")))
+            continue
+
+        source = block.get("source") if isinstance(block.get("source"), dict) else {}
+        media_type = source.get("media_type", "application/octet-stream")
+        ext = EXTENSION_MAP.get(media_type, ".bin")
+        filename = f"attachment_{attachment_index}{ext}"
+        path = work_dir / filename
+        attachment_index += 1
+
+        if source.get("type") == "base64" and isinstance(source.get("data"), str):
+            path.write_bytes(base64.b64decode(source["data"]))
+            if str(media_type).startswith("image/"):
+                image_paths.append(path)
+            else:
+                text_parts.append(f"[Attached document saved at: {path}]")
+        elif source.get("type") == "url" and source.get("url"):
+            text_parts.append(f"[Image URL: {source['url']}]")
+
+    return "\n\n".join(part for part in text_parts if part), image_paths
+
+
+def _build_codex_command(
+    backend_model: str | None,
+    work_dir: Path,
+    output_file: Path,
+    image_paths: list[Path],
+) -> list[str]:
+    """Build a non-interactive Codex CLI command."""
+    model = backend_model or os.environ.get("CODEX_MODEL")
+    cmd = [
+        _codex_binary(),
+        "-a",
+        "never",
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--ignore-rules",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "--color",
+        "never",
+        "-C",
+        str(work_dir),
+        "-o",
+        str(output_file),
+    ]
+    if model:
+        cmd.extend(["-m", model])
+    for image_path in image_paths:
+        cmd.extend(["--image", str(image_path)])
+    cmd.append("-")
+    return cmd
+
+
+def _parse_codex_json_lines(output: str) -> tuple[str, dict[str, int] | None]:
+    """Parse Codex JSONL output into final assistant text and usage."""
+    full_text = ""
+    usage: dict[str, int] | None = None
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event_usage = _codex_event_usage(event)
+        if event_usage:
+            usage = event_usage
+        _, full_text = _codex_event_text_delta(event, full_text)
+    return full_text, usage
+
+
+async def call_codex_cli(
+    prompt: str | list[dict],
+    model: str,
+    session_logger: SessionLogger,
+    tools: list[Tool] | None = None,
+    messages: list[dict] | None = None,
+) -> ClaudeResponse:
+    """Call Codex CLI and return an OpenAI-compatible response container."""
+    resolution = resolve_model_request(model)
+    request_id = session_logger.request_id
+    dashboard_state.request_started(
+        request_id,
+        model,
+        api_key=session_logger.api_key,
+        messages=messages,
+    )
+    effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
+    response = ClaudeResponse()
+    semaphore = _get_codex_semaphore()
+    acquire_start = time.monotonic()
+    acquired = False
+
+    try:
+        await asyncio.wait_for(semaphore.acquire(), timeout=CODEX_TIMEOUT)
+        acquired = True
+        acquire_ms = int((time.monotonic() - acquire_start) * 1000)
+        query_start = time.monotonic()
+
+        with tempfile.TemporaryDirectory(prefix="agentbridge-codex-") as tmp:
+            work_dir = Path(tmp)
+            output_file = work_dir / "last-message.txt"
+            codex_prompt, image_paths = _prepare_codex_prompt(effective_prompt, work_dir)
+            proc = await asyncio.create_subprocess_exec(
+                *_build_codex_command(resolution.model, work_dir, output_file, image_paths),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(codex_prompt.encode()),
+                timeout=CODEX_TIMEOUT,
+            )
+            query_ms = int((time.monotonic() - query_start) * 1000)
+            session_logger.log_timing(acquire_ms, query_ms)
+
+            stdout = stdout_bytes.decode(errors="replace")
+            stderr = stderr_bytes.decode(errors="replace")
+            parsed_text, usage = _parse_codex_json_lines(stdout)
+            if output_file.exists():
+                parsed_text = output_file.read_text(errors="replace")
+
+            if proc.returncode != 0:
+                raise RuntimeError((stderr or stdout or "Codex CLI failed").strip())
+
+            response.text = parsed_text
+            if response.text:
+                session_logger.log_chunk(response.text)
+            if usage:
+                response.usage = usage
+                session_logger.log_usage(
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                )
+
+        if tools and response.text:
+            remaining_text, tool_calls = parse_tool_response(response.text, tools)
+            if tool_calls:
+                response.text = remaining_text
+                response.tool_calls = tool_calls
+                session_logger.log_chunk(
+                    f"[parsed tool_call: {tool_calls[0].function.name}]"
+                )
+
+        usage_dict = response.get_usage()
+        logging.info(
+            f"[{request_id}] Completed codex | acquire={session_logger.acquire_ms}ms "
+            f"query={session_logger.query_ms}ms "
+            f"tokens={usage_dict['prompt_tokens']}in/{usage_dict['completion_tokens']}out"
+        )
+        session_logger.log_finish(response.finish_reason)
+        dashboard_state.request_completed(request_id, usage=usage_dict)
+        return response
+    except asyncio.TimeoutError:
+        session_logger.log_error(
+            f"Timeout after {CODEX_TIMEOUT}s",
+            exception_type="TimeoutError",
+        )
+        dashboard_state.request_errored(request_id, f"Timeout after {CODEX_TIMEOUT}s")
+        raise BridgeHTTPException(
+            status_code=504,
+            detail=(
+                f"Codex CLI timed out after {CODEX_TIMEOUT}s. "
+                "Increase CODEX_TIMEOUT env var for longer requests."
+            ),
+            request_id=request_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"[{request_id}] Codex {type(e).__name__}: {e}")
+        session_logger.log_error(
+            str(e),
+            exception_type=type(e).__name__,
+            traceback_str=tb,
+        )
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
+        raise
+    finally:
+        if acquired:
+            semaphore.release()
+
+
 async def call_claude_sdk(
     prompt: str | list[dict],
     model: str,
@@ -936,7 +1288,8 @@ async def call_claude_sdk(
         nonlocal _acquire_ms, _query_start
         response = ClaudeResponse()
         acquire_start = time.monotonic()
-        async with pool.acquire(resolved_model, request_id=request_id) as client:
+        claude_pool = await ensure_claude_pool()
+        async with claude_pool.acquire(resolved_model, request_id=request_id) as client:
             _acquire_ms = int((time.monotonic() - acquire_start) * 1000)
             _query_start = time.monotonic()
             await send_query(client, effective_prompt)
@@ -982,7 +1335,7 @@ async def call_claude_sdk(
         session_logger.log_finish(response.finish_reason)
         dashboard_state.request_completed(request_id, usage=usage)
     except asyncio.TimeoutError:
-        snap = pool.snapshot()
+        snap = pool.snapshot() if pool is not None else {}
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
         # Record partial timing if acquire completed before timeout fired
         if (
@@ -1011,7 +1364,7 @@ async def call_claude_sdk(
     except HTTPException:
         raise
     except Exception as e:
-        snap = pool.snapshot()
+        snap = pool.snapshot() if pool is not None else {}
         tb = traceback.format_exc()
         logging.error(f"[{request_id}] {type(e).__name__}: {e} | pool={snap}")
         session_logger.log_error(
@@ -1089,7 +1442,8 @@ async def stream_claude_sdk(
 
     try:
         acquire_start = time.monotonic()
-        async with pool.acquire(resolved_model, request_id=request_id) as client:
+        claude_pool = await ensure_claude_pool()
+        async with claude_pool.acquire(resolved_model, request_id=request_id) as client:
             acquire_ms = int((time.monotonic() - acquire_start) * 1000)
             query_start = time.monotonic()
             async with asyncio.timeout(CLAUDE_TIMEOUT):
@@ -1185,7 +1539,7 @@ async def stream_claude_sdk(
         yield f"data: {final_chunk.model_dump_json()}\n\n"
         yield "data: [DONE]\n\n"
     except asyncio.TimeoutError:
-        snap = pool.snapshot()
+        snap = pool.snapshot() if pool is not None else {}
         logging.error(f"[{request_id}] Timeout after {CLAUDE_TIMEOUT}s | pool={snap}")
         # Record partial timing if acquire completed before timeout fired
         if (
@@ -1244,7 +1598,7 @@ async def stream_claude_sdk(
         yield "data: [DONE]\n\n"
         return
     except Exception as e:
-        snap = pool.snapshot()
+        snap = pool.snapshot() if pool is not None else {}
         tb = traceback.format_exc()
         logging.error(f"[{request_id}] {type(e).__name__}: {e} | pool={snap}")
         session_logger.log_error(
@@ -1273,27 +1627,274 @@ async def stream_claude_sdk(
             dashboard_state.request_errored(request_id, "Request cancelled")
 
 
+async def stream_codex_cli(
+    prompt: str | list[dict],
+    model: str,
+    request_id: str,
+    session_logger: SessionLogger,
+    tools: list[Tool] | None = None,
+    messages: list[dict] | None = None,
+):
+    """Stream Codex CLI output as OpenAI-compatible SSE chunks."""
+    resolution = resolve_model_request(model)
+    dashboard_state.request_started(
+        request_id,
+        model,
+        api_key=session_logger.api_key,
+        messages=messages,
+    )
+    created = int(time.time())
+    finish_reason = "stop"
+    _dashboard_handled = False
+    effective_prompt = apply_tool_prompt(prompt, tools) if tools else prompt
+    semaphore = _get_codex_semaphore()
+    acquired = False
+    proc: asyncio.subprocess.Process | None = None
+    stderr_task: asyncio.Task[bytes] | None = None
+    full_text = ""
+    stream_usage: Usage | None = None
+    acquire_ms: int | None = None
+    query_start: float | None = None
+
+    initial_chunk = ChatCompletionChunk(
+        id=request_id,
+        created=created,
+        model=model,
+        choices=[StreamChoice(delta=DeltaMessage(role="assistant", content=""))],
+    )
+    yield f"data: {initial_chunk.model_dump_json()}\n\n"
+
+    try:
+        acquire_start = time.monotonic()
+        await asyncio.wait_for(semaphore.acquire(), timeout=CODEX_TIMEOUT)
+        acquired = True
+        acquire_ms = int((time.monotonic() - acquire_start) * 1000)
+        query_start = time.monotonic()
+
+        with tempfile.TemporaryDirectory(prefix="agentbridge-codex-") as tmp:
+            work_dir = Path(tmp)
+            output_file = work_dir / "last-message.txt"
+            codex_prompt, image_paths = _prepare_codex_prompt(effective_prompt, work_dir)
+            proc = await asyncio.create_subprocess_exec(
+                *_build_codex_command(resolution.model, work_dir, output_file, image_paths),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stderr_task = asyncio.create_task(proc.stderr.read())
+            assert proc.stdin is not None
+            proc.stdin.write(codex_prompt.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            async with asyncio.timeout(CODEX_TIMEOUT):
+                assert proc.stdout is not None
+                async for raw_line in proc.stdout:
+                    line = raw_line.decode(errors="replace").strip()
+                    if not line or not line.startswith("{"):
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    event_error = _codex_event_error(event)
+                    if event_error:
+                        raise RuntimeError(event_error)
+
+                    event_usage = _codex_event_usage(event)
+                    if event_usage:
+                        prompt_tokens = event_usage.get("input_tokens", 0)
+                        completion_tokens = event_usage.get("output_tokens", 0)
+                        stream_usage = Usage(
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=prompt_tokens + completion_tokens,
+                        )
+                        session_logger.log_usage(prompt_tokens, completion_tokens)
+
+                    delta, full_text = _codex_event_text_delta(event, full_text)
+                    if not delta:
+                        continue
+                    session_logger.log_chunk(delta)
+                    dashboard_state.chunk_received(request_id, delta)
+                    if not tools:
+                        chunk = ChatCompletionChunk(
+                            id=request_id,
+                            created=created,
+                            model=model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=delta))],
+                        )
+                        yield f"data: {chunk.model_dump_json()}\n\n"
+
+                await proc.wait()
+
+            stderr = ""
+            if stderr_task is not None:
+                stderr = (await stderr_task).decode(errors="replace")
+            if proc.returncode != 0:
+                raise RuntimeError((stderr or "Codex CLI failed").strip())
+
+            if output_file.exists():
+                final_text = output_file.read_text(errors="replace")
+                if final_text.startswith(full_text):
+                    final_delta = final_text[len(full_text):]
+                elif final_text != full_text:
+                    final_delta = final_text
+                else:
+                    final_delta = ""
+                if final_delta:
+                    session_logger.log_chunk(final_delta)
+                    dashboard_state.chunk_received(request_id, final_delta)
+                    if not tools:
+                        chunk = ChatCompletionChunk(
+                            id=request_id,
+                            created=created,
+                            model=model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=final_delta))],
+                        )
+                        yield f"data: {chunk.model_dump_json()}\n\n"
+                full_text = final_text or full_text
+
+        query_ms = int((time.monotonic() - query_start) * 1000)
+        session_logger.log_timing(acquire_ms, query_ms)
+
+        if tools and full_text:
+            remaining_text, tool_calls = parse_tool_response(full_text, tools)
+            if tool_calls:
+                finish_reason = "tool_calls"
+                for tool_call in tool_calls:
+                    chunk = ChatCompletionChunk(
+                        id=request_id,
+                        created=created,
+                        model=model,
+                        choices=[
+                            StreamChoice(delta=DeltaMessage(tool_calls=[tool_call]))
+                        ],
+                    )
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+                session_logger.log_chunk(
+                    f"[parsed tool_call: {tool_calls[0].function.name}]"
+                )
+            else:
+                _CHUNK_SIZE = 100
+                for i in range(0, len(full_text), _CHUNK_SIZE):
+                    text_chunk = full_text[i : i + _CHUNK_SIZE]
+                    chunk = ChatCompletionChunk(
+                        id=request_id,
+                        created=created,
+                        model=model,
+                        choices=[StreamChoice(delta=DeltaMessage(content=text_chunk))],
+                    )
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+
+        usage_dict = stream_usage.model_dump() if stream_usage else {}
+        logging.info(
+            f"[{request_id}] Completed codex | acquire={session_logger.acquire_ms}ms "
+            f"query={session_logger.query_ms}ms "
+            f"tokens={usage_dict.get('prompt_tokens', 0)}in/"
+            f"{usage_dict.get('completion_tokens', 0)}out"
+        )
+        session_logger.log_finish(finish_reason)
+        dashboard_state.request_completed(request_id, usage=usage_dict)
+        _dashboard_handled = True
+
+        final_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason=finish_reason)],
+            usage=stream_usage,
+        )
+        yield f"data: {final_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+    except asyncio.TimeoutError:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        if (
+            session_logger.acquire_ms is None
+            and acquire_ms is not None
+            and query_start is not None
+        ):
+            session_logger.log_timing(
+                acquire_ms,
+                int((time.monotonic() - query_start) * 1000),
+            )
+        session_logger.log_error(
+            f"Timeout after {CODEX_TIMEOUT}s",
+            exception_type="TimeoutError",
+        )
+        dashboard_state.request_errored(request_id, f"Timeout after {CODEX_TIMEOUT}s")
+        _dashboard_handled = True
+        error_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=model,
+            choices=[
+                StreamChoice(
+                    delta=DeltaMessage(
+                        content=(
+                            "\n\n[Error: Request timed out. Increase CODEX_TIMEOUT "
+                            "env var for longer requests.]"
+                        )
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        )
+        yield f"data: {error_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    except Exception as e:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        tb = traceback.format_exc()
+        logging.error(f"[{request_id}] Codex {type(e).__name__}: {e}")
+        session_logger.log_error(
+            str(e),
+            exception_type=type(e).__name__,
+            traceback_str=tb,
+        )
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
+        _dashboard_handled = True
+        error_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=model,
+            choices=[StreamChoice(
+                delta=DeltaMessage(content="\n\n[Error: An internal error occurred.]"),
+                finish_reason=None,
+            )],
+        )
+        yield f"data: {error_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    finally:
+        if stderr_task is not None and not stderr_task.done():
+            stderr_task.cancel()
+        if acquired:
+            semaphore.release()
+        if not _dashboard_handled:
+            dashboard_state.request_errored(request_id, "Request cancelled")
+
+
 @app.post("/api/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, http_request: Request):
     """OpenAI-compatible chat completions endpoint.
 
     Note: Concurrency is managed by the client pool (POOL_SIZE env var).
-    Model selection supports OpenRouter-style slugs (e.g., anthropic/claude-sonnet-4)
-    or simple names (opus, sonnet, haiku). Model parameter is required.
+    Model selection supports OpenRouter-style slugs (e.g., anthropic/claude-sonnet-4),
+    simple Claude names (opus, sonnet, haiku), and Codex/OpenAI model identifiers.
+    Model parameter is required.
 
     Tool calling is supported via the `tools` and `tool_choice` parameters.
     When the model decides to use tools, the response will include `tool_calls`
     with `finish_reason="tool_calls"`.
     """
-    # Guard: pool must be initialized before handling requests
-    if pool is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Service unavailable: server is still initializing",
-        )
-
     # Validate model early to fail fast (UnsupportedModelError handled by exception handler)
-    resolve_model(request.model)
+    model_resolution = resolve_model_request(request.model)
 
     # Warn about unsupported params (once per param)
     _warn_unsupported_params(request)
@@ -1316,7 +1917,12 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
 
         async def stream_with_logging():
             try:
-                async for chunk in stream_claude_sdk(
+                stream_fn = (
+                    stream_claude_sdk
+                    if model_resolution.provider == "claude"
+                    else stream_codex_cli
+                )
+                async for chunk in stream_fn(
                     prompt,
                     request.model,
                     request_id,
@@ -1344,13 +1950,22 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         )
 
     try:
-        response = await call_claude_sdk(
-            prompt,
-            request.model,
-            session_logger,
-            request.tools,
-            messages=dash_messages,
-        )
+        if model_resolution.provider == "claude":
+            response = await call_claude_sdk(
+                prompt,
+                request.model,
+                session_logger,
+                request.tools,
+                messages=dash_messages,
+            )
+        else:
+            response = await call_codex_cli(
+                prompt,
+                request.model,
+                session_logger,
+                request.tools,
+                messages=dash_messages,
+            )
     finally:
         session_logger.write(
             request.messages,
@@ -1383,7 +1998,10 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
 async def list_models():
     """List available models with OpenRouter-style slugs."""
     return ModelList(
-        data=[ModelInfo(id=m["slug"]) for m in AVAILABLE_MODELS]
+        data=[
+            ModelInfo(id=m["slug"], owned_by=m.get("owned_by", "agentbridge"))
+            for m in AVAILABLE_MODELS
+        ]
     )
 
 
@@ -1426,7 +2044,7 @@ def main():
     import uvicorn
 
     parser = argparse.ArgumentParser(
-        description="AgentBridge - OpenAI-compatible API for Claude"
+        description="AgentBridge - OpenAI-compatible API for Claude and Codex"
     )
     parser.add_argument(
         "-v",

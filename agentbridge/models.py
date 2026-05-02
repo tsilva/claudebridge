@@ -1,6 +1,7 @@
 """OpenAI-compatible request/response models and model mapping."""
 
 import re
+from dataclasses import dataclass
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field
@@ -139,7 +140,7 @@ class ModelInfo(BaseModel):
     id: str
     object: str = "model"
     created: int = 0
-    owned_by: str = "claude-code"
+    owned_by: str = "agentbridge"
 
 
 class ModelList(BaseModel):
@@ -160,22 +161,61 @@ class ErrorResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Model mapping (OpenRouter slug → Claude Code model identifier)
+# Model mapping (OpenRouter slug → provider model identifier)
 # ---------------------------------------------------------------------------
 
 # Simple names that map directly to Claude Code model identifiers
-SIMPLE_NAMES: set[str] = {"opus", "sonnet", "haiku"}
+CLAUDE_SIMPLE_NAMES: set[str] = {"opus", "sonnet", "haiku"}
+
+# Backwards-compatible export used by tests and callers.
+SIMPLE_NAMES = CLAUDE_SIMPLE_NAMES
+
+# Codex aliases. The bare "codex" alias lets the Codex CLI use its configured
+# default model unless CODEX_MODEL is set by the server process.
+CODEX_SIMPLE_NAMES: set[str] = {"codex"}
+CODEX_MODEL_SLUGS: set[str] = {
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+}
+OPENAI_PROVIDER_PREFIXES = ("openai/", "codex/")
+
+
+@dataclass(frozen=True)
+class ModelResolution:
+    """Resolved provider and backend model identifier."""
+
+    provider: Literal["claude", "codex"]
+    model: str | None
 
 # Word-boundary pattern for matching model names in slugs
 _MODEL_PATTERN = re.compile(
-    r'(?:^|[^a-zA-Z])(' + '|'.join(sorted(SIMPLE_NAMES)) + r')(?:[^a-zA-Z]|$)',
+    r'(?:^|[^a-zA-Z])(' + '|'.join(sorted(CLAUDE_SIMPLE_NAMES)) + r')(?:[^a-zA-Z]|$)',
+    re.IGNORECASE,
+)
+_CODEX_PATTERN = re.compile(
+    r'(?:^|[^a-zA-Z])(codex)(?:[^a-zA-Z]|$)',
     re.IGNORECASE,
 )
 
-# Available models for /api/v1/models endpoint (OpenRouter-style)
+# Available models for /api/v1/models endpoint (OpenRouter-style where applicable)
 AVAILABLE_MODELS: list[dict[str, str]] = [
-    {"slug": f"anthropic/claude-{name}", "name": f"Claude {name.capitalize()}"}
-    for name in sorted(SIMPLE_NAMES)
+    *[
+        {
+            "slug": f"anthropic/claude-{name}",
+            "name": f"Claude {name.capitalize()}",
+            "owned_by": "claude-code",
+        }
+        for name in sorted(CLAUDE_SIMPLE_NAMES)
+    ],
+    {"slug": "codex", "name": "Codex default", "owned_by": "codex-cli"},
+    *[
+        {"slug": f"openai/{name}", "name": name.upper(), "owned_by": "codex-cli"}
+        for name in sorted(CODEX_MODEL_SLUGS)
+    ],
 ]
 
 
@@ -186,13 +226,15 @@ class UnsupportedModelError(ValueError):
         self.model = model
         super().__init__(
             f"Unsupported model: '{model}'. "
-            f"Supported models: {', '.join(sorted(SIMPLE_NAMES))}, "
-            f"or any slug containing 'opus', 'sonnet', or 'haiku'"
+            f"Supported Claude models: {', '.join(sorted(CLAUDE_SIMPLE_NAMES))}, "
+            "or slugs containing 'opus', 'sonnet', or 'haiku'. "
+            "Supported Codex models: codex, openai/<model>, codex/<model>, "
+            "or gpt-5* model identifiers."
         )
 
 
-def resolve_model(model: str) -> str:
-    """Resolve an OpenRouter-style slug or simple name to a Claude Code model.
+def resolve_model_request(model: str) -> ModelResolution:
+    """Resolve an OpenRouter-style slug or simple name to a backend provider.
 
     Uses word-boundary matching to prevent false positives. Model names must appear
     as distinct segments separated by non-alpha characters (/, -, _, ., etc.).
@@ -201,7 +243,8 @@ def resolve_model(model: str) -> str:
         model: Model identifier (OpenRouter slug or simple name)
 
     Returns:
-        Claude Code model identifier (opus, sonnet, haiku)
+        Provider and backend model identifier. Codex's bare alias has model=None,
+        allowing the CLI to use its configured default model.
 
     Raises:
         UnsupportedModelError: If model is not recognized
@@ -210,13 +253,39 @@ def resolve_model(model: str) -> str:
     model_lower = model_stripped.lower()
 
     # Already a simple Claude Code name (exact match)
-    if model_lower in SIMPLE_NAMES:
-        return model_lower
+    if model_lower in CLAUDE_SIMPLE_NAMES:
+        return ModelResolution(provider="claude", model=model_lower)
+
+    if model_lower in CODEX_SIMPLE_NAMES:
+        return ModelResolution(provider="codex", model=None)
+
+    for prefix in OPENAI_PROVIDER_PREFIXES:
+        if model_lower.startswith(prefix):
+            provider_model = model_stripped[len(prefix):].strip()
+            if not provider_model or provider_model.lower() in CODEX_SIMPLE_NAMES:
+                return ModelResolution(provider="codex", model=None)
+            return ModelResolution(provider="codex", model=provider_model)
+
+    if model_lower.startswith("gpt-5"):
+        return ModelResolution(provider="codex", model=model_stripped)
 
     # Word-boundary match: find model name as a distinct segment in the slug
     match = _MODEL_PATTERN.search(model_lower)
     if match:
-        return match.group(1).lower()
+        return ModelResolution(provider="claude", model=match.group(1).lower())
+
+    if _CODEX_PATTERN.search(model_lower):
+        return ModelResolution(provider="codex", model=model_stripped)
 
     # Unknown model - raise error
     raise UnsupportedModelError(model)
+
+
+def resolve_model(model: str) -> str:
+    """Resolve a model identifier to its backend model name.
+
+    Kept for backwards compatibility. Use resolve_model_request() when the
+    provider is needed.
+    """
+    resolution = resolve_model_request(model)
+    return resolution.model or "codex"

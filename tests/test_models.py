@@ -560,7 +560,7 @@ class TestModelInfo:
         assert info.id == "anthropic/claude-sonnet-4"
         assert info.object == "model"
         assert info.created == 0
-        assert info.owned_by == "claude-code"
+        assert info.owned_by == "agentbridge"
 
     def test_model_list(self):
         """Model list."""
