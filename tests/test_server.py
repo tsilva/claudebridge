@@ -15,17 +15,20 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agentbridge.models import (
+    ChatCompletionRequest,
     FunctionDefinition,
     ImageUrl,
     ImageUrlContent,
     Message,
     TextContent,
     Tool,
+    resolve_model_request,
 )
 from agentbridge.server import (
     ClaudeResponse,
     _build_codex_command,
     _parse_codex_json_lines,
+    _resolve_codex_reasoning_effort,
     app,
     build_tool_prompt,
     extract_text_from_content,
@@ -334,10 +337,15 @@ class TestCodexHelpers:
                 Path("/tmp/work"),
                 Path("/tmp/work/out.txt"),
                 [Path("/tmp/work/image.png")],
+                "high",
             )
 
         assert cmd[:4] == ["/bin/codex", "-a", "never", "exec"]
         assert cmd[-1] == "-"
+        model_arg_index = cmd.index("-m")
+        assert cmd[model_arg_index + 1] == "gpt-5.4-mini"
+        reasoning_arg_index = cmd.index("-c")
+        assert cmd[reasoning_arg_index + 1] == 'model_reasoning_effort="high"'
         image_arg_index = cmd.index("--image")
         assert cmd[image_arg_index + 1] == "/tmp/work/image.png"
 
@@ -367,6 +375,55 @@ class TestCodexHelpers:
         text, usage = _parse_codex_json_lines(output)
         assert text == "hello"
         assert usage == {"input_tokens": 3, "output_tokens": 2}
+
+    def test_parse_codex_json_lines_extracts_agent_message_text(self):
+        """Codex CLI agent_message events are treated as assistant output."""
+        output = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "abc"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "id": "item_0",
+                            "type": "agent_message",
+                            "text": "AGENTBRIDGE_CODEX_OK",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 5, "output_tokens": 1},
+                    }
+                ),
+            ]
+        )
+
+        text, usage = _parse_codex_json_lines(output)
+        assert text == "AGENTBRIDGE_CODEX_OK"
+        assert usage == {"input_tokens": 5, "output_tokens": 1}
+
+    def test_gpt55_defaults_to_high_reasoning_effort(self):
+        """gpt-5.5 Codex requests default to high reasoning."""
+        request = ChatCompletionRequest(
+            model="openai/gpt-5.5",
+            messages=[Message(role="user", content="Hello")],
+        )
+        resolution = resolve_model_request(request.model)
+
+        assert _resolve_codex_reasoning_effort(request, resolution) == "high"
+
+    def test_request_reasoning_effort_overrides_gpt55_default(self):
+        """Explicit reasoning_effort wins over the gpt-5.5 default."""
+        request = ChatCompletionRequest(
+            model="openai/gpt-5.5",
+            messages=[Message(role="user", content="Hello")],
+            reasoning_effort="medium",
+        )
+        resolution = resolve_model_request(request.model)
+
+        assert _resolve_codex_reasoning_effort(request, resolution) == "medium"
 
 
 @pytest.mark.unit
@@ -483,7 +540,8 @@ class TestModelsEndpoint:
         response = test_client.get("/api/v1/models")
         data = response.json()
         ids = {model["id"] for model in data["data"]}
-        assert "codex" in ids
+        assert "openai/gpt-5.5" in ids
+        assert "codex" not in ids
         assert any(model_id.startswith("anthropic/claude-") for model_id in ids)
         assert any(model_id.startswith("openai/") for model_id in ids)
         for model in data["data"]:

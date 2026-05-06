@@ -39,6 +39,7 @@ from .models import (
     Message,
     ModelInfo,
     ModelList,
+    ReasoningEffort,
     StreamChoice,
     TextContent,
     Tool,
@@ -536,6 +537,10 @@ _UNSUPPORTED_PARAMS = {
     "max_tokens",  # Accepted but not supported: pool pre-warms clients without this
 }
 
+CODEX_DEFAULT_REASONING_EFFORT_BY_MODEL: dict[str, ReasoningEffort] = {
+    "gpt-5.5": "high",
+}
+
 
 def _warn_unsupported_params(request: "ChatCompletionRequest") -> None:
     """Log a warning for unsupported parameters that have a non-None value."""
@@ -546,8 +551,35 @@ def _warn_unsupported_params(request: "ChatCompletionRequest") -> None:
                 _warned_params.add(param)
                 logging.warning(
                     f"Parameter '{param}' is accepted but not supported by AgentBridge "
-                    "— value ignored"
+                    "- value ignored"
                 )
+
+
+def _resolve_codex_reasoning_effort(
+    request: ChatCompletionRequest,
+    resolution: Any,
+) -> ReasoningEffort | None:
+    """Resolve Codex reasoning effort from OpenAI/OpenRouter-compatible fields."""
+    if resolution.provider != "codex":
+        return None
+
+    effort = request.reasoning_effort
+    if effort is None and request.reasoning:
+        raw_effort = request.reasoning.get("effort")
+        if raw_effort is not None:
+            valid_efforts = {"minimal", "low", "medium", "high", "xhigh"}
+            if raw_effort not in valid_efforts:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Unsupported reasoning effort. Use one of: "
+                        "minimal, low, medium, high, xhigh."
+                    ),
+                )
+            effort = raw_effort
+
+    model = (resolution.model or "").lower()
+    return effort or CODEX_DEFAULT_REASONING_EFFORT_BY_MODEL.get(model)
 
 
 async def ensure_claude_pool() -> ClientPool:
@@ -947,7 +979,7 @@ def _codex_text_from_content(content: Any) -> str:
             parts.append(block)
         elif isinstance(block, dict):
             block_type = str(block.get("type", ""))
-            if block_type in {"text", "output_text", "assistant_message"}:
+            if block_type in {"text", "output_text", "assistant_message", "agent_message"}:
                 text = block.get("text") or block.get("content")
                 if isinstance(text, str):
                     parts.append(text)
@@ -960,7 +992,11 @@ def _codex_container_is_assistant(container: dict[str, Any]) -> bool:
     """Return whether a JSON event/container looks like assistant output."""
     role = container.get("role")
     item_type = str(container.get("type", ""))
-    return role == "assistant" or "assistant" in item_type or item_type == "output_text"
+    return (
+        role == "assistant"
+        or "assistant" in item_type
+        or item_type in {"agent_message", "output_text"}
+    )
 
 
 def _codex_event_error(event: dict[str, Any]) -> str | None:
@@ -1076,13 +1112,13 @@ def _prepare_codex_prompt(
 
 
 def _build_codex_command(
-    backend_model: str | None,
+    backend_model: str,
     work_dir: Path,
     output_file: Path,
     image_paths: list[Path],
+    reasoning_effort: ReasoningEffort | None = None,
 ) -> list[str]:
     """Build a non-interactive Codex CLI command."""
-    model = backend_model or os.environ.get("CODEX_MODEL")
     cmd = [
         _codex_binary(),
         "-a",
@@ -1100,9 +1136,11 @@ def _build_codex_command(
         str(work_dir),
         "-o",
         str(output_file),
+        "-m",
+        backend_model,
     ]
-    if model:
-        cmd.extend(["-m", model])
+    if reasoning_effort:
+        cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
     for image_path in image_paths:
         cmd.extend(["--image", str(image_path)])
     cmd.append("-")
@@ -1134,6 +1172,7 @@ async def call_codex_cli(
     session_logger: SessionLogger,
     tools: list[Tool] | None = None,
     messages: list[dict] | None = None,
+    reasoning_effort: ReasoningEffort | None = None,
 ) -> ClaudeResponse:
     """Call Codex CLI and return an OpenAI-compatible response container."""
     resolution = resolve_model_request(model)
@@ -1161,7 +1200,13 @@ async def call_codex_cli(
             output_file = work_dir / "last-message.txt"
             codex_prompt, image_paths = _prepare_codex_prompt(effective_prompt, work_dir)
             proc = await asyncio.create_subprocess_exec(
-                *_build_codex_command(resolution.model, work_dir, output_file, image_paths),
+                *_build_codex_command(
+                    resolution.model or model,
+                    work_dir,
+                    output_file,
+                    image_paths,
+                    reasoning_effort,
+                ),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -1634,6 +1679,7 @@ async def stream_codex_cli(
     session_logger: SessionLogger,
     tools: list[Tool] | None = None,
     messages: list[dict] | None = None,
+    reasoning_effort: ReasoningEffort | None = None,
 ):
     """Stream Codex CLI output as OpenAI-compatible SSE chunks."""
     resolution = resolve_model_request(model)
@@ -1676,7 +1722,13 @@ async def stream_codex_cli(
             output_file = work_dir / "last-message.txt"
             codex_prompt, image_paths = _prepare_codex_prompt(effective_prompt, work_dir)
             proc = await asyncio.create_subprocess_exec(
-                *_build_codex_command(resolution.model, work_dir, output_file, image_paths),
+                *_build_codex_command(
+                    resolution.model or model,
+                    work_dir,
+                    output_file,
+                    image_paths,
+                    reasoning_effort,
+                ),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -1895,6 +1947,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     """
     # Validate model early to fail fast (UnsupportedModelError handled by exception handler)
     model_resolution = resolve_model_request(request.model)
+    codex_reasoning_effort = _resolve_codex_reasoning_effort(request, model_resolution)
 
     # Warn about unsupported params (once per param)
     _warn_unsupported_params(request)
@@ -1922,15 +1975,27 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
                     if model_resolution.provider == "claude"
                     else stream_codex_cli
                 )
-                async for chunk in stream_fn(
-                    prompt,
-                    request.model,
-                    request_id,
-                    session_logger,
-                    request.tools,
-                    messages=dash_messages,
-                ):
-                    yield chunk
+                if model_resolution.provider == "codex":
+                    async for chunk in stream_fn(
+                        prompt,
+                        request.model,
+                        request_id,
+                        session_logger,
+                        request.tools,
+                        messages=dash_messages,
+                        reasoning_effort=codex_reasoning_effort,
+                    ):
+                        yield chunk
+                else:
+                    async for chunk in stream_fn(
+                        prompt,
+                        request.model,
+                        request_id,
+                        session_logger,
+                        request.tools,
+                        messages=dash_messages,
+                    ):
+                        yield chunk
             finally:
                 session_logger.write(
                     request.messages,
@@ -1965,6 +2030,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
                 session_logger,
                 request.tools,
                 messages=dash_messages,
+                reasoning_effort=codex_reasoning_effort,
             )
     finally:
         session_logger.write(

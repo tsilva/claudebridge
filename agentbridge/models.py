@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,8 @@ class TextContent(BaseModel):
 
 ContentPart = Annotated[Union[TextContent, ImageUrlContent], Field(discriminator='type')]
 
+ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
+
 
 class Message(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
@@ -72,6 +74,8 @@ class ChatCompletionRequest(BaseModel):
     messages: list[Message] = Field(min_length=1)
     temperature: float | None = None
     max_tokens: int | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    reasoning: dict[str, Any] | None = None
     stream: bool = False
     # Tool calling support
     tools: list[Tool] | None = None
@@ -170,9 +174,6 @@ CLAUDE_SIMPLE_NAMES: set[str] = {"opus", "sonnet", "haiku"}
 # Backwards-compatible export used by tests and callers.
 SIMPLE_NAMES = CLAUDE_SIMPLE_NAMES
 
-# Codex aliases. The bare "codex" alias lets the Codex CLI use its configured
-# default model unless CODEX_MODEL is set by the server process.
-CODEX_SIMPLE_NAMES: set[str] = {"codex"}
 CODEX_MODEL_SLUGS: set[str] = {
     "gpt-5.5",
     "gpt-5.4",
@@ -196,11 +197,6 @@ _MODEL_PATTERN = re.compile(
     r'(?:^|[^a-zA-Z])(' + '|'.join(sorted(CLAUDE_SIMPLE_NAMES)) + r')(?:[^a-zA-Z]|$)',
     re.IGNORECASE,
 )
-_CODEX_PATTERN = re.compile(
-    r'(?:^|[^a-zA-Z])(codex)(?:[^a-zA-Z]|$)',
-    re.IGNORECASE,
-)
-
 # Available models for /api/v1/models endpoint (OpenRouter-style where applicable)
 AVAILABLE_MODELS: list[dict[str, str]] = [
     *[
@@ -211,7 +207,6 @@ AVAILABLE_MODELS: list[dict[str, str]] = [
         }
         for name in sorted(CLAUDE_SIMPLE_NAMES)
     ],
-    {"slug": "codex", "name": "Codex default", "owned_by": "codex-cli"},
     *[
         {"slug": f"openai/{name}", "name": name.upper(), "owned_by": "codex-cli"}
         for name in sorted(CODEX_MODEL_SLUGS)
@@ -228,8 +223,8 @@ class UnsupportedModelError(ValueError):
             f"Unsupported model: '{model}'. "
             f"Supported Claude models: {', '.join(sorted(CLAUDE_SIMPLE_NAMES))}, "
             "or slugs containing 'opus', 'sonnet', or 'haiku'. "
-            "Supported Codex models: codex, openai/<model>, codex/<model>, "
-            "or gpt-5* model identifiers."
+            "Supported Codex models: openai/<model>, codex/<model>, "
+            "or bare gpt-5* model identifiers."
         )
 
 
@@ -243,8 +238,7 @@ def resolve_model_request(model: str) -> ModelResolution:
         model: Model identifier (OpenRouter slug or simple name)
 
     Returns:
-        Provider and backend model identifier. Codex's bare alias has model=None,
-        allowing the CLI to use its configured default model.
+        Provider and backend model identifier.
 
     Raises:
         UnsupportedModelError: If model is not recognized
@@ -256,14 +250,11 @@ def resolve_model_request(model: str) -> ModelResolution:
     if model_lower in CLAUDE_SIMPLE_NAMES:
         return ModelResolution(provider="claude", model=model_lower)
 
-    if model_lower in CODEX_SIMPLE_NAMES:
-        return ModelResolution(provider="codex", model=None)
-
     for prefix in OPENAI_PROVIDER_PREFIXES:
         if model_lower.startswith(prefix):
             provider_model = model_stripped[len(prefix):].strip()
-            if not provider_model or provider_model.lower() in CODEX_SIMPLE_NAMES:
-                return ModelResolution(provider="codex", model=None)
+            if not provider_model or provider_model.lower() == "codex":
+                raise UnsupportedModelError(model)
             return ModelResolution(provider="codex", model=provider_model)
 
     if model_lower.startswith("gpt-5"):
@@ -273,9 +264,6 @@ def resolve_model_request(model: str) -> ModelResolution:
     match = _MODEL_PATTERN.search(model_lower)
     if match:
         return ModelResolution(provider="claude", model=match.group(1).lower())
-
-    if _CODEX_PATTERN.search(model_lower):
-        return ModelResolution(provider="codex", model=model_stripped)
 
     # Unknown model - raise error
     raise UnsupportedModelError(model)
@@ -288,4 +276,4 @@ def resolve_model(model: str) -> str:
     provider is needed.
     """
     resolution = resolve_model_request(model)
-    return resolution.model or "codex"
+    return resolution.model or model.strip()

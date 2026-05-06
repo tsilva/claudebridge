@@ -112,18 +112,22 @@ class TestOpenRouterSlugs:
 class TestCodexModels:
     """Tests for Codex model routing."""
 
-    def test_resolve_codex_alias(self):
-        """Bare codex routes to Codex with CLI default model."""
-        result = resolve_model_request("codex")
-        assert result.provider == "codex"
-        assert result.model is None
-        assert resolve_model("codex") == "codex"
+    def test_codex_alias_is_not_a_model_default(self):
+        """Bare codex is not accepted because requests must specify a model."""
+        with pytest.raises(UnsupportedModelError):
+            resolve_model_request("codex")
 
     def test_resolve_openai_codex_slug(self):
         """OpenAI-style Codex slug resolves to Codex provider."""
         result = resolve_model_request("openai/gpt-5.3-codex")
         assert result.provider == "codex"
         assert result.model == "gpt-5.3-codex"
+
+    def test_resolve_openai_gpt55_slug(self):
+        """OpenAI gpt-5.5 slug resolves to Codex provider."""
+        result = resolve_model_request("openai/gpt-5.5")
+        assert result.provider == "codex"
+        assert result.model == "gpt-5.5"
 
     def test_resolve_bare_gpt5_model(self):
         """Bare gpt-5 model IDs route to Codex."""
@@ -162,6 +166,11 @@ class TestUnsupportedModels:
         with pytest.raises(UnsupportedModelError):
             resolve_model("not-a-model")
 
+    def test_codex_word_boundary_does_not_route_to_default(self):
+        """Strings containing codex are not accepted without an explicit model."""
+        with pytest.raises(UnsupportedModelError):
+            resolve_model("some-codex-alias")
+
     def test_partial_slug_raises_error(self):
         """Partial slug raises error."""
         with pytest.raises(UnsupportedModelError):
@@ -194,7 +203,6 @@ class TestMappingConsistency:
         slugs = {m["slug"] for m in AVAILABLE_MODELS}
         for name in SIMPLE_NAMES:
             assert f"anthropic/claude-{name}" in slugs
-        assert "codex" in slugs
         for name in CODEX_MODEL_SLUGS:
             assert f"openai/{name}" in slugs
 

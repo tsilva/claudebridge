@@ -164,6 +164,7 @@ class TestChatCompletionRequest:
             messages=[Message(role="user", content="Hello")],
             temperature=0.7,
             max_tokens=1000,
+            reasoning_effort="high",
             stream=True,
             top_p=0.9,
             frequency_penalty=0.5,
@@ -172,6 +173,7 @@ class TestChatCompletionRequest:
         )
         assert req.temperature == 0.7
         assert req.max_tokens == 1000
+        assert req.reasoning_effort == "high"
         assert req.top_p == 0.9
         assert req.frequency_penalty == 0.5
         assert req.presence_penalty == 0.5

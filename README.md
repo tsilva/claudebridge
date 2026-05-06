@@ -41,7 +41,7 @@ curl http://localhost:8082/api/v1/chat/completions \
 ```bash
 curl http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "codex", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "openai/gpt-5.5", "reasoning_effort": "high", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 ```python
@@ -59,7 +59,8 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 
 response = client.chat.completions.create(
-    model="openai/gpt-5.4-mini",  # or "codex" for the Codex CLI default
+    model="openai/gpt-5.5",
+    reasoning_effort="high",
     messages=[{"role": "user", "content": "Hello from Codex!"}],
 )
 print(response.choices[0].message.content)
@@ -82,8 +83,8 @@ uv run --extra test pytest           # run full tests; integration tests expect 
 - Requires Python 3.12+ and at least one authenticated backend: `claude login` for Claude models or `codex login` for Codex models.
 - Endpoints: `POST /api/v1/chat/completions`, `GET /api/v1/models`, `GET /health`, and `/dashboard`.
 - Claude model inputs are `opus`, `sonnet`, `haiku`, or slugs containing those names, such as `anthropic/claude-sonnet-4`.
-- Codex model inputs are `codex`, `openai/<model>`, `codex/<model>`, or bare `gpt-5...` model IDs. The `codex` alias uses the Codex CLI default model unless `CODEX_MODEL` is set.
-- `PORT`, `POOL_SIZE`, `CLAUDE_TIMEOUT`, `CODEX_TIMEOUT`, `CODEX_MODEL`, `LOG_DIR`, and `MAX_LOG_FILES` control local runtime behavior.
+- Codex model inputs are `openai/<model>`, `codex/<model>`, or bare `gpt-5...` model IDs. The requested model is passed directly to Codex CLI; `gpt-5.5` defaults to `reasoning_effort="high"` unless the request sets another effort.
+- `PORT`, `POOL_SIZE`, `CLAUDE_TIMEOUT`, `CODEX_TIMEOUT`, `LOG_DIR`, and `MAX_LOG_FILES` control local runtime behavior.
 - Each Claude request gets a fresh or pre-warmed Claude SDK client and the client is destroyed after use. Each Codex request runs an ephemeral `codex exec` process in an isolated temporary directory.
 - Claude Code tools are disabled for SDK sessions. Codex runs with read-only sandboxing, no approvals, ephemeral sessions, and ignored project rules. OpenAI-style function calling is emulated by prompting for JSON tool-call output.
 - Session logs are written as JSON under `logs/sessions` by default; base64 image and PDF attachments are saved beside their request logs.
