@@ -372,6 +372,31 @@ class TestDashboardPage:
         assert "text/html" in resp.headers["content-type"]
         assert "agentbridge" in resp.text
 
+    def test_dashboard_links_to_chat_tester(self):
+        """Dashboard page links to the chat tester."""
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.get("/dashboard")
+        assert resp.status_code == 200
+        assert "/dashboard/chat" in resp.text
+
+
+@pytest.mark.unit
+class TestDashboardChatPage:
+    """Tests for GET /dashboard/chat."""
+
+    def test_returns_chat_tester_html(self):
+        """Chat tester page includes attachment and error-detail UI."""
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.get("/dashboard/chat")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert "Send a test message" in resp.text
+        assert "Drop files to attach" in resp.text
+        assert "Copy details" in resp.text
+        assert "Server error" in resp.text
+
 
 @pytest.mark.unit
 class TestDashboardPool:

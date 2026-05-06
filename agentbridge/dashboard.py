@@ -275,6 +275,12 @@ def create_dashboard_router(
         page_path = TEMPLATES_DIR / "page.html"
         return HTMLResponse(content=page_path.read_text())
 
+    @router.get("/dashboard/chat", response_class=HTMLResponse)
+    async def dashboard_chat_page():
+        """Serve the chat completion test console."""
+        page_path = TEMPLATES_DIR / "chat.html"
+        return HTMLResponse(content=page_path.read_text())
+
     @router.get("/dashboard/pool", response_class=HTMLResponse)
     async def dashboard_pool(request: Request):
         """Render pool status fragment."""

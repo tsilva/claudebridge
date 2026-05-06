@@ -19,7 +19,7 @@ codex login
 agentbridge
 ```
 
-Open [http://localhost:8082/dashboard](http://localhost:8082/dashboard), or point an OpenAI-compatible client at `http://localhost:8082/api/v1`.
+Open [http://localhost:8082/dashboard](http://localhost:8082/dashboard), use the chat tester at [http://localhost:8082/dashboard/chat](http://localhost:8082/dashboard/chat), or point an OpenAI-compatible client at `http://localhost:8082/api/v1`.
 
 Install from source when working on the repo:
 
@@ -92,7 +92,7 @@ No PyPI API token is required. The workflow builds the package, verifies the bui
 ## Notes
 
 - Requires Python 3.12+ and at least one authenticated backend: `claude login` for Claude models or `codex login` for Codex models.
-- Endpoints: `POST /api/v1/chat/completions`, `GET /api/v1/models`, `GET /health`, and `/dashboard`.
+- Endpoints: `POST /api/v1/chat/completions`, `GET /api/v1/models`, `GET /health`, `/dashboard`, and `/dashboard/chat`.
 - Claude model inputs are `opus`, `sonnet`, `haiku`, or slugs containing those names, such as `anthropic/claude-sonnet-4`.
 - Codex model inputs are `openai/<model>`, `codex/<model>`, or bare `gpt-5...` model IDs. The requested model is passed directly to Codex CLI; `gpt-5.5` defaults to `reasoning_effort="high"` unless the request sets another effort.
 - `PORT`, `POOL_SIZE`, `CLAUDE_TIMEOUT`, `CODEX_TIMEOUT`, `LOG_DIR`, and `MAX_LOG_FILES` control local runtime behavior.

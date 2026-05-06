@@ -64,6 +64,23 @@
             gap: 8px;
             color: var(--text-primary);
         }
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 5px 8px;
+            font-size: 11px;
+        }
+        .header-link:hover {
+            color: var(--text-primary);
+            border-color: var(--accent-orange);
+        }
 
         /* Dashboard layout */
         .dashboard {
@@ -403,7 +420,10 @@
                 </svg>
                 agentbridge
             </h1>
-            <div hx-ext="sse" sse-connect="/dashboard/pool/stream" sse-swap="message" hx-swap="innerHTML"></div>
+            <div class="header-actions">
+                <a class="header-link" href="/dashboard/chat">chat tester</a>
+                <div hx-ext="sse" sse-connect="/dashboard/pool/stream" sse-swap="message" hx-swap="innerHTML"></div>
+            </div>
         </header>
         <div class="dashboard">
             <div class="sidebar">
