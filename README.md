@@ -78,6 +78,17 @@ uv run --extra test pytest -m unit   # run unit tests
 uv run --extra test pytest           # run full tests; integration tests expect a server
 ```
 
+## Publishing
+
+Publishing to PyPI runs through the `Release` GitHub Actions workflow and targets the `agentbridge-py` project. Configure PyPI Trusted Publishing for:
+
+- Owner: `tsilva`
+- Repository: `agentbridge`
+- Workflow: `release.yml`
+- Environment: `pypi`
+
+No PyPI API token is required. The workflow builds the package, verifies the built project metadata is `agentbridge-py`, creates the GitHub release, then publishes `dist/` to PyPI.
+
 ## Notes
 
 - Requires Python 3.12+ and at least one authenticated backend: `claude login` for Claude models or `codex login` for Codex models.

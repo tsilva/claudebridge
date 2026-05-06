@@ -69,7 +69,9 @@ jobs:
     if: needs.changes.outputs.should-publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: pypi
+    environment:
+      name: pypi
+      url: https://pypi.org/project/agentbridge-py/
     permissions:
       contents: write
       id-token: write
@@ -89,6 +91,50 @@ jobs:
       - name: Build package
         if: steps.check-version.outputs.tag_exists == 'false'
         run: uv build
+      - name: Verify PyPI project metadata
+        if: steps.check-version.outputs.tag_exists == 'false'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import email.parser
+          import glob
+          import tarfile
+          import tomllib
+          import zipfile
+
+          expected_name = "agentbridge-py"
+          names = set()
+
+          for wheel in glob.glob("dist/*.whl"):
+              with zipfile.ZipFile(wheel) as archive:
+                  metadata_path = next(
+                      name
+                      for name in archive.namelist()
+                      if name.endswith(".dist-info/METADATA")
+                  )
+                  metadata = archive.read(metadata_path).decode()
+                  names.add(email.parser.Parser().parsestr(metadata)["Name"])
+
+          for sdist in glob.glob("dist/*.tar.gz"):
+              with tarfile.open(sdist, "r:gz") as archive:
+                  pyproject_path = next(
+                      member
+                      for member in archive.getmembers()
+                      if member.name.endswith("/pyproject.toml")
+                  )
+                  pyproject_file = archive.extractfile(pyproject_path)
+                  if pyproject_file is None:
+                      raise RuntimeError(f"Could not read {pyproject_path.name}")
+                  pyproject = tomllib.loads(pyproject_file.read().decode())
+                  names.add(pyproject["project"]["name"])
+
+          if names != {expected_name}:
+              raise RuntimeError(
+                  f"Expected built project name {expected_name!r}, got {sorted(names)!r}"
+              )
+
+          print(f"Verified PyPI project name: {expected_name}")
+          PY
       - name: Create GitHub release
         if: steps.check-version.outputs.tag_exists == 'false'
         run: gh release create "${{ steps.check-version.outputs.tag }}" --title "${{ steps.check-version.outputs.tag }}" --generate-notes dist/*
@@ -97,3 +143,5 @@ jobs:
       - name: Publish to PyPI
         if: steps.check-version.outputs.tag_exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
