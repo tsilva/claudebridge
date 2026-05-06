@@ -1,61 +1,176 @@
-<h3>{{ request_id }}
-    {% if is_active %}
-    <span class="badge badge-active">active</span>
-    {% elif error %}
-    <span class="badge badge-err">err</span>
-    {% else %}
-    <span class="badge badge-ok">ok</span>
-    {% endif %}
-</h3>
-<table>
-    <tr><td><strong>Model</strong></td><td>{{ model }}</td></tr>
-    <tr><td><strong>API Key</strong></td><td><code>{{ api_key }}</code></td></tr>
-    <tr><td><strong>Time</strong></td><td>{{ timestamp }}</td></tr>
-    <tr><td><strong>Duration</strong></td><td>{{ duration_ms }}ms</td></tr>
-    {% if acquire_ms %}<tr><td><strong>Acquire</strong></td><td>{{ acquire_ms }}ms</td></tr>{% endif %}
-    {% if query_ms %}<tr><td><strong>Query</strong></td><td>{{ query_ms }}ms</td></tr>{% endif %}
-    {% if input_tokens is not none or output_tokens is not none %}<tr><td><strong>Tokens</strong></td><td>{{ input_tokens|default(0, true) }} in / {{ output_tokens|default(0, true) }} out</td></tr>{% endif %}
-    {% if error %}<tr><td><strong>Error</strong></td><td style="color: var(--status-red);">{{ error }}</td></tr>{% endif %}
-</table>
-{% if messages %}
-<h4>Messages</h4>
-{% for msg in messages %}
-<details class="message message--{{ msg.role }}" {% if not is_active and loop.last %}open{% endif %}>
-    <summary>[{{ msg.role }}]</summary>
-    <pre>{{ msg.content }}</pre>
-    {% if msg.attachments %}
-    <div class="attachments">
-        {% for att in msg.attachments %}
-            {% if att.content_type == "url" %}
-                <a href="{{ att.url }}" target="_blank" rel="noopener">
-                    <img class="attachment-img" src="{{ att.url }}" loading="lazy" alt="attachment">
-                </a>
-            {% elif att.media_type.startswith("image/") %}
-                <a href="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" target="_blank">
-                    <img class="attachment-img" src="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" loading="lazy" alt="attachment">
-                </a>
-            {% else %}
-                <a class="attachment-link" href="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" download="{{ att.filename }}">
-                    <span class="attachment-icon">&#128196;</span> {{ att.filename }}
-                </a>
+<div class="detail-shell">
+    <header class="detail-header">
+        <div class="request-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
+                <path d="m3.3 7 8.7 5 8.7-5"></path>
+                <path d="M12 22V12"></path>
+            </svg>
+        </div>
+        <div class="detail-heading">
+            <h3>
+                {{ request_id }}
+                {% if is_active %}
+                <span class="badge badge-active">streaming</span>
+                {% elif error %}
+                <span class="badge badge-err">error</span>
+                {% else %}
+                <span class="badge badge-ok">ok</span>
+                {% endif %}
+                <span class="badge badge-model">{{ model }}</span>
+            </h3>
+            <div class="detail-subline">
+                <span>{{ duration_ms }}ms</span>
+                {% if input_tokens is not none or output_tokens is not none %}
+                <span>{{ (input_tokens|default(0, true)) + (output_tokens|default(0, true)) }} tokens</span>
+                {% endif %}
+                {% if is_active %}<span>Live Stream</span>{% endif %}
+            </div>
+        </div>
+        <div class="detail-actions">
+            <button class="action-button" type="button" data-copy="{{ request_id }}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+                Copy ID
+            </button>
+            {% if not is_active %}
+            <a class="action-button" href="/dashboard/log/{{ request_id }}" target="_blank" rel="noopener">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>
+                Open Log
+            </a>
             {% endif %}
-        {% endfor %}
-    </div>
-    {% endif %}
-</details>
-{% endfor %}
-{% endif %}
-{% if is_active %}
-<h4>Live Stream</h4>
-<div hx-ext="sse" sse-connect="/dashboard/stream/{{ request_id }}" sse-swap="chunk" hx-swap="beforeend">
-    <pre id="stream-output">{{ buffered_text }}</pre>
-    <div hx-get="/dashboard/request/{{ request_id }}"
-         hx-trigger="sse:done delay:500ms, sse:error delay:500ms"
-         hx-target="#detail"
-         hx-swap="innerHTML"
-         style="display:none"></div>
+        </div>
+    </header>
+
+    <section class="meta-grid" aria-label="Request metadata">
+        <div class="meta-item">
+            <div class="meta-label">API Key</div>
+            <div class="meta-value mono">{{ api_key }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Started</div>
+            <div class="meta-value">{{ timestamp or "Active" }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Completed</div>
+            <div class="meta-value">{% if is_active %}Pending{% else %}{{ timestamp or "-" }}{% endif %}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Duration</div>
+            <div class="meta-value">{{ duration_ms }}ms</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Prompt Tokens</div>
+            <div class="meta-value">{{ input_tokens|default("-", true) }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Completion Tokens</div>
+            <div class="meta-value">{{ output_tokens|default("-", true) }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Total Tokens</div>
+            <div class="meta-value">{% if input_tokens is not none or output_tokens is not none %}{{ (input_tokens|default(0, true)) + (output_tokens|default(0, true)) }}{% else %}-{% endif %}</div>
+        </div>
+    </section>
+
+    <section class="detail-grid">
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-tabs">
+                    <span class="panel-tab active">Messages</span>
+                    <span class="panel-tab">Attachments</span>
+                </div>
+                {% if messages %}<span class="count-pill">{{ messages|length }}</span>{% endif %}
+            </div>
+            <div class="panel-body">
+                {% if messages %}
+                {% for msg in messages %}
+                <details class="message message--{{ msg.role }}" open>
+                    <summary>
+                        <span>{{ msg.role }}</span>
+                        <span>{% if timestamp %}{{ timestamp[11:19] }}{% endif %}</span>
+                    </summary>
+                    <pre>{{ msg.content }}</pre>
+                    {% if msg.attachments %}
+                    <div class="attachments">
+                        {% for att in msg.attachments %}
+                            {% if att.content_type == "url" %}
+                                <a href="{{ att.url }}" target="_blank" rel="noopener">
+                                    <img class="attachment-img" src="{{ att.url }}" loading="lazy" alt="attachment">
+                                </a>
+                            {% elif att.media_type.startswith("image/") %}
+                                <a href="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" target="_blank">
+                                    <img class="attachment-img" src="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" loading="lazy" alt="attachment">
+                                </a>
+                            {% else %}
+                                <a class="attachment-link" href="/dashboard/attachment/{{ request_id }}/{{ att.filename }}" download="{{ att.filename }}">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>
+                                    {{ att.filename }}
+                                </a>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </details>
+                {% endfor %}
+                {% else %}
+                <p class="empty-state">No messages captured for this request.</p>
+                {% endif %}
+
+                {% if is_active %}
+                <div class="live-stream" hx-ext="sse" sse-connect="/dashboard/stream/{{ request_id }}" sse-swap="chunk" hx-swap="beforeend">
+                    <div class="live-stream-title">
+                        <span class="status-dot idle"></span>
+                        Live Stream
+                    </div>
+                    <pre id="stream-output">{{ buffered_text }}</pre>
+                    <div hx-get="/dashboard/request/{{ request_id }}"
+                         hx-trigger="sse:done delay:500ms, sse:error delay:500ms"
+                         hx-target="#detail"
+                         hx-swap="innerHTML"
+                         style="display:none"></div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-tabs">
+                    <span class="panel-tab active">{% if error %}Response{% else %}Response{% endif %}</span>
+                    <span class="panel-tab">Info</span>
+                </div>
+            </div>
+            <div class="panel-body">
+                {% if error %}
+                <div class="error-card">
+                    <div class="error-card-header">
+                        <div class="error-title">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+                            <span>Server error<small>{{ error }}</small></span>
+                        </div>
+                        <div class="error-actions">
+                            <button class="action-button" type="button" data-copy="{{ error }}">Copy details</button>
+                            <button class="action-button" type="button" onclick="location.reload()">Retry</button>
+                        </div>
+                    </div>
+                    <pre class="error-pre">{
+  "error": {
+    "message": {{ error|tojson }},
+    "type": {{ (exception_type or "server_error")|tojson }},
+    "code": {{ (exception_type or "server_error")|tojson }}
+  },
+  "request_id": {{ request_id|tojson }},
+  "status": "error"
+}</pre>
+                </div>
+                {% elif response %}
+                <pre class="response-pre">{{ response }}</pre>
+                {% elif is_active %}
+                <p class="empty-state">Streaming response will appear in the live stream panel.</p>
+                {% else %}
+                <p class="empty-state">No response body captured for this request.</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
 </div>
-{% elif response %}
-<h4>Response</h4>
-<pre>{{ response }}</pre>
-{% endif %}

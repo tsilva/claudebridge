@@ -1,12 +1,18 @@
-<div class="pool-bar">
-    {% for i in range(size) %}
-        {% if i < in_use %}
-        <div class="pool-dot in-use" title="in use"></div>
-        {% elif i < in_use + available %}
-        <div class="pool-dot available" title="available"></div>
-        {% else %}
-        <div class="pool-dot empty" title="empty"></div>
-        {% endif %}
-    {% endfor %}
-    <small>{{ available }}/{{ size }} available</small>
+<div class="pool-status">
+    <span class="pool-health{% if available == 0 %} error{% endif %}">
+        <span class="pool-dot {% if available > 0 %}available{% else %}empty{% endif %}"></span>
+        {% if available > 0 %}Healthy{% else %}Busy{% endif %}
+    </span>
+    <span class="pool-count">{{ available }}/{{ size }} available</span>
+    <span class="pool-dots" aria-hidden="true">
+        {% for i in range(size) %}
+            {% if i < in_use %}
+            <span class="pool-dot in-use" title="in use"></span>
+            {% elif i < in_use + available %}
+            <span class="pool-dot available" title="available"></span>
+            {% else %}
+            <span class="pool-dot empty" title="empty"></span>
+            {% endif %}
+        {% endfor %}
+    </span>
 </div>

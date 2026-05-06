@@ -341,6 +341,9 @@ def create_dashboard_router(
         for log in completed:
             log["is_active"] = False
             log["api_key"] = _mask_api_key(log.get("api_key"))
+            timing = log.get("timing") if isinstance(log.get("timing"), dict) else {}
+            if log.get("duration_ms") is None:
+                log["duration_ms"] = timing.get("duration_ms", 0)
             # Supplement with cached usage if log file didn't have it
             if log.get("input_tokens") is None:
                 usage_data = log.get("usage")
@@ -415,6 +418,7 @@ def create_dashboard_router(
                     "input_tokens": None,
                     "output_tokens": None,
                     "error": None,
+                    "exception_type": None,
                     "is_active": True,
                     "buffered_text": active.get("buffered_text", ""),
                     "messages": active.get("messages", []),
@@ -445,12 +449,28 @@ def create_dashboard_router(
                 "input_tokens": usage.get("input_tokens"),
                 "output_tokens": usage.get("output_tokens"),
                 "error": parsed.get("error"),
+                "exception_type": parsed.get("exception_type"),
                 "is_active": False,
                 "buffered_text": "",
                 "messages": parsed.get("messages", []),
                 "response": parsed.get("response"),
             },
         )
+
+    @router.get("/dashboard/log/{request_id}")
+    async def dashboard_log(request_id: str):
+        """Serve the raw JSON log for a completed request."""
+        if not re.fullmatch(r"chatcmpl-[a-f0-9]{8,32}", request_id):
+            raise HTTPException(status_code=400, detail="Invalid request ID")
+
+        log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+        log_path = log_dir / f"{request_id}.json"
+        if not log_path.is_file():
+            raise HTTPException(status_code=404, detail="Request log not found")
+        if not log_path.resolve().is_relative_to(log_dir.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid request ID")
+
+        return FileResponse(log_path, media_type="application/json")
 
     @router.get("/dashboard/attachment/{request_id}/{filename}")
     async def dashboard_attachment(request_id: str, filename: str):

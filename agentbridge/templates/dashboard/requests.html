@@ -1,30 +1,67 @@
-<h3>Requests</h3>
+<h3 class="request-list-title">Requests</h3>
 {% if requests %}
-{% for req in requests %}
+{% set active_requests = requests|selectattr("is_active")|list %}
+{% set failed_requests = requests|rejectattr("is_active")|selectattr("error")|list %}
+{% set completed_requests = requests|rejectattr("is_active")|rejectattr("error")|list %}
+
+{% macro request_row(req) -%}
 <div class="request-row{% if req.is_active %} request-row-active{% endif %}" data-request-id="{{ req.request_id }}" hx-get="/dashboard/request/{{ req.request_id }}" hx-target="#detail" hx-swap="innerHTML">
-    <span><span class="status-dot {% if req.is_active %}streaming{% elif req.error %}error{% else %}idle{% endif %}"></span>{{ req.request_id[-8:] }}
-        {% if req.is_active %}
-        {% if req.api_key and req.api_key != "anonymous" %}
-        <span class="badge badge-key">{{ req.api_key }}</span>
-        {% endif %}
-        <span class="badge badge-active">{{ req.model }}</span>
-        {% elif req.error %}
-        <span class="badge badge-err">err</span>
-        {% if req.api_key and req.api_key != "anonymous" %}
-        <span class="badge badge-key">{{ req.api_key }}</span>
-        {% endif %}
-        <span class="badge badge-model">{{ req.model }}</span>
-        {% else %}
-        <span class="badge badge-ok">ok</span>
-        {% if req.api_key and req.api_key != "anonymous" %}
-        <span class="badge badge-key">{{ req.api_key }}</span>
-        {% endif %}
-        <span class="badge badge-model">{{ req.model }}</span>
-        {% endif %}
-    </span>
-    <span class="elapsed">{% if req.is_active %}{{ req.elapsed_s }}s{% else %}{{ req.duration_ms }}ms{% endif %}{% if not req.is_active and (req.input_tokens is not none or req.output_tokens is not none) %} <span class="tokens">{{ (req.input_tokens or 0) + (req.output_tokens or 0) }}t</span>{% endif %}</span>
+    <div class="request-main">
+        <div class="request-title">
+            <span class="status-dot {% if req.is_active %}streaming{% elif req.error %}error{% else %}idle{% endif %}"></span>
+            <span class="request-id">{{ req.request_id }}</span>
+            {% if req.is_active %}
+            <span class="badge badge-active">streaming</span>
+            {% elif req.error %}
+            <span class="badge badge-err">error</span>
+            {% else %}
+            <span class="badge badge-ok">ok</span>
+            {% endif %}
+        </div>
+        <div class="request-model">{{ req.model }}{% if req.api_key and req.api_key != "anonymous" %} · {{ req.api_key }}{% endif %}</div>
+    </div>
+    <div class="request-metrics">
+        <div>{% if req.is_active %}{{ req.elapsed_s }}s{% else %}{{ req.duration_ms }}ms{% endif %}</div>
+        <div>{% if not req.is_active and (req.input_tokens is not none or req.output_tokens is not none) %}{{ (req.input_tokens or 0) + (req.output_tokens or 0) }}t{% else %}-{% endif %}</div>
+    </div>
 </div>
-{% endfor %}
+{%- endmacro %}
+
+{% if active_requests %}
+<section class="request-group">
+    <h4 class="request-group-title">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        Active ({{ active_requests|length }})
+    </h4>
+    {% for req in active_requests %}
+    {{ request_row(req) }}
+    {% endfor %}
+</section>
+{% endif %}
+
+{% if completed_requests %}
+<section class="request-group">
+    <h4 class="request-group-title">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        Completed ({{ completed_requests|length }})
+    </h4>
+    {% for req in completed_requests %}
+    {{ request_row(req) }}
+    {% endfor %}
+</section>
+{% endif %}
+
+{% if failed_requests %}
+<section class="request-group">
+    <h4 class="request-group-title">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+        Failed ({{ failed_requests|length }})
+    </h4>
+    {% for req in failed_requests %}
+    {{ request_row(req) }}
+    {% endfor %}
+</section>
+{% endif %}
 {% else %}
 <p class="empty-state">No requests</p>
 {% endif %}
