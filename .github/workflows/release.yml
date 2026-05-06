@@ -81,7 +81,30 @@ jobs:
           fetch-depth: 0
       - name: Check version
         id: check-version
-        uses: tsilva/.github/.github/actions/check-version@main
+        shell: bash
+        run: |
+          version="$(python - <<'PY'
+          import tomllib
+
+          with open("pyproject.toml", "rb") as pyproject_file:
+              pyproject = tomllib.load(pyproject_file)
+
+          print(pyproject["project"]["version"])
+          PY
+          )"
+          tag="v${version}"
+
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null || \
+             git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            tag_exists=true
+          else
+            tag_exists=false
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=${tag_exists}" >> "$GITHUB_OUTPUT"
+          echo "Version ${version} maps to ${tag}; tag_exists=${tag_exists}"
       - name: Setup uv
         if: steps.check-version.outputs.tag_exists == 'false'
         uses: astral-sh/setup-uv@v5
