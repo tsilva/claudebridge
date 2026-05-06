@@ -21,91 +21,91 @@ from agentbridge.models import (
 
 @pytest.mark.unit
 class TestSimpleNames:
-    """Tests for simple model name resolution."""
+    """Tests for Claude Code model name resolution."""
 
     def test_resolve_opus(self):
-        """Resolve 'opus' to 'opus'."""
-        assert resolve_model("opus") == "opus"
+        """Resolve claudecode/opus to opus."""
+        assert resolve_model("claudecode/opus") == "opus"
 
     def test_resolve_sonnet(self):
-        """Resolve 'sonnet' to 'sonnet'."""
-        assert resolve_model("sonnet") == "sonnet"
+        """Resolve claudecode/sonnet to sonnet."""
+        assert resolve_model("claudecode/sonnet") == "sonnet"
 
     def test_resolve_haiku(self):
-        """Resolve 'haiku' to 'haiku'."""
-        assert resolve_model("haiku") == "haiku"
+        """Resolve claudecode/haiku to haiku."""
+        assert resolve_model("claudecode/haiku") == "haiku"
 
     def test_resolve_case_insensitive_upper(self):
         """Simple names are case insensitive (uppercase)."""
-        assert resolve_model("OPUS") == "opus"
-        assert resolve_model("SONNET") == "sonnet"
-        assert resolve_model("HAIKU") == "haiku"
+        assert resolve_model("CLAUDECODE/OPUS") == "opus"
+        assert resolve_model("CLAUDECODE/SONNET") == "sonnet"
+        assert resolve_model("CLAUDECODE/HAIKU") == "haiku"
 
     def test_resolve_case_insensitive_mixed(self):
         """Simple names are case insensitive (mixed case)."""
-        assert resolve_model("Opus") == "opus"
-        assert resolve_model("SoNnEt") == "sonnet"
-        assert resolve_model("HaIkU") == "haiku"
+        assert resolve_model("ClaudeCode/Opus") == "opus"
+        assert resolve_model("ClaudeCode/SoNnEt") == "sonnet"
+        assert resolve_model("ClaudeCode/HaIkU") == "haiku"
 
 
 @pytest.mark.unit
 class TestOpenRouterSlugs:
-    """Tests for OpenRouter slug resolution."""
+    """Tests for Claude Code slug resolution."""
 
     def test_resolve_claude_opus_45(self):
         """Resolve Claude Opus 4.5 slug."""
-        assert resolve_model("anthropic/claude-opus-4.5") == "opus"
+        assert resolve_model("claudecode/anthropic/claude-opus-4.5") == "opus"
 
     def test_resolve_claude_sonnet_45(self):
         """Resolve Claude Sonnet 4.5 slug."""
-        assert resolve_model("anthropic/claude-sonnet-4.5") == "sonnet"
+        assert resolve_model("claudecode/anthropic/claude-sonnet-4.5") == "sonnet"
 
     def test_resolve_claude_haiku_45(self):
         """Resolve Claude Haiku 4.5 slug."""
-        assert resolve_model("anthropic/claude-haiku-4.5") == "haiku"
+        assert resolve_model("claudecode/anthropic/claude-haiku-4.5") == "haiku"
 
     def test_resolve_claude_opus_41(self):
         """Resolve Claude Opus 4.1 slug."""
-        assert resolve_model("anthropic/claude-opus-4.1") == "opus"
+        assert resolve_model("claudecode/anthropic/claude-opus-4.1") == "opus"
 
     def test_resolve_claude_opus_4(self):
         """Resolve Claude Opus 4 slug."""
-        assert resolve_model("anthropic/claude-opus-4") == "opus"
+        assert resolve_model("claudecode/anthropic/claude-opus-4") == "opus"
 
     def test_resolve_claude_sonnet_4(self):
         """Resolve Claude Sonnet 4 slug."""
-        assert resolve_model("anthropic/claude-sonnet-4") == "sonnet"
+        assert resolve_model("claudecode/anthropic/claude-sonnet-4") == "sonnet"
 
     def test_resolve_claude_37_sonnet(self):
         """Resolve Claude 3.7 Sonnet slug."""
-        assert resolve_model("anthropic/claude-3.7-sonnet") == "sonnet"
+        assert resolve_model("claudecode/anthropic/claude-3.7-sonnet") == "sonnet"
 
     def test_resolve_claude_35_haiku(self):
         """Resolve Claude 3.5 Haiku slug."""
-        assert resolve_model("anthropic/claude-3.5-haiku") == "haiku"
+        assert resolve_model("claudecode/anthropic/claude-3.5-haiku") == "haiku"
 
     def test_resolve_claude_35_haiku_dated(self):
         """Resolve Claude 3.5 Haiku with date slug."""
-        assert resolve_model("anthropic/claude-3.5-haiku-20241022") == "haiku"
+        assert resolve_model("claudecode/anthropic/claude-3.5-haiku-20241022") == "haiku"
 
     def test_resolve_claude_35_sonnet(self):
         """Resolve Claude 3.5 Sonnet slug."""
-        assert resolve_model("anthropic/claude-3.5-sonnet") == "sonnet"
+        assert resolve_model("claudecode/anthropic/claude-3.5-sonnet") == "sonnet"
 
     def test_resolve_claude_35_sonnet_dated(self):
         """Resolve Claude 3.5 Sonnet with date slug."""
-        assert resolve_model("anthropic/claude-3.5-sonnet-20240620") == "sonnet"
+        assert resolve_model("claudecode/anthropic/claude-3.5-sonnet-20240620") == "sonnet"
 
     def test_resolve_claude_3_series(self):
         """Resolve Claude 3 series slugs."""
-        assert resolve_model("anthropic/claude-3-haiku") == "haiku"
-        assert resolve_model("anthropic/claude-3-sonnet") == "sonnet"
-        assert resolve_model("anthropic/claude-3-opus") == "opus"
+        assert resolve_model("claudecode/anthropic/claude-3-haiku") == "haiku"
+        assert resolve_model("claudecode/anthropic/claude-3-sonnet") == "sonnet"
+        assert resolve_model("claudecode/anthropic/claude-3-opus") == "opus"
 
     def test_resolve_case_insensitive_slug(self):
         """OpenRouter slugs are case insensitive."""
-        assert resolve_model("ANTHROPIC/CLAUDE-SONNET-4") == "sonnet"
-        assert resolve_model("Anthropic/Claude-Opus-4.5") == "opus"
+        assert resolve_model("CLAUDECODE/ANTHROPIC/CLAUDE-SONNET-4") == "sonnet"
+        assert resolve_model("ClaudeCode/Anthropic/Claude-Opus-4.5") == "opus"
 
 
 @pytest.mark.unit
@@ -117,29 +117,39 @@ class TestCodexModels:
         with pytest.raises(UnsupportedModelError):
             resolve_model_request("codex")
 
-    def test_resolve_openai_codex_slug(self):
-        """OpenAI-style Codex slug resolves to Codex provider."""
-        result = resolve_model_request("openai/gpt-5.3-codex")
+    def test_resolve_codex_slug(self):
+        """Namespaced Codex slug resolves to Codex provider."""
+        result = resolve_model_request("codex/gpt-5.3-codex")
         assert result.provider == "codex"
         assert result.model == "gpt-5.3-codex"
 
-    def test_resolve_openai_gpt55_slug(self):
-        """OpenAI gpt-5.5 slug resolves to Codex provider."""
-        result = resolve_model_request("openai/gpt-5.5")
+    def test_resolve_gpt55_slug(self):
+        """Codex gpt-5.5 slug resolves to Codex provider."""
+        result = resolve_model_request("codex/gpt-5.5")
         assert result.provider == "codex"
         assert result.model == "gpt-5.5"
-
-    def test_resolve_bare_gpt5_model(self):
-        """Bare gpt-5 model IDs route to Codex."""
-        result = resolve_model_request("gpt-5.4-mini")
-        assert result.provider == "codex"
-        assert result.model == "gpt-5.4-mini"
 
     def test_resolve_codex_provider_prefix(self):
         """codex/<model> prefix routes to Codex."""
         result = resolve_model_request("codex/gpt-5.5")
         assert result.provider == "codex"
         assert result.model == "gpt-5.5"
+
+
+@pytest.mark.unit
+class TestOpenRouterModels:
+    """Tests for OpenRouter model routing."""
+
+    def test_resolve_openrouter_model(self):
+        """openrouter/<provider>/<model> passes the provider model through."""
+        result = resolve_model_request("openrouter/anthropic/claude-sonnet-4")
+        assert result.provider == "openrouter"
+        assert result.model == "anthropic/claude-sonnet-4"
+
+    def test_openrouter_requires_provider_model(self):
+        """OpenRouter model IDs must include the upstream provider segment."""
+        with pytest.raises(UnsupportedModelError):
+            resolve_model_request("openrouter/claude-sonnet-4")
 
 
 @pytest.mark.unit
@@ -151,10 +161,15 @@ class TestUnsupportedModels:
         with pytest.raises(UnsupportedModelError):
             resolve_model("gpt-4")
 
-    def test_invalid_openrouter_format(self):
-        """Invalid OpenRouter format raises error."""
+    def test_unprefixed_openrouter_format(self):
+        """Provider-native slugs require an AgentBridge namespace."""
         with pytest.raises(UnsupportedModelError):
             resolve_model("anthropic/gpt-4")
+
+    def test_openai_prefix_no_longer_routes_codex(self):
+        """OpenAI is an upstream namespace, not an AgentBridge provider."""
+        with pytest.raises(UnsupportedModelError):
+            resolve_model("openai/gpt-5.5")
 
     def test_empty_string_raises_error(self):
         """Empty string raises error."""
@@ -202,16 +217,20 @@ class TestMappingConsistency:
         """Available models list contains Claude and Codex entries."""
         slugs = {m["slug"] for m in AVAILABLE_MODELS}
         for name in SIMPLE_NAMES:
-            assert f"anthropic/claude-{name}" in slugs
+            assert f"claudecode/{name}" in slugs
         for name in CODEX_MODEL_SLUGS:
-            assert f"openai/{name}" in slugs
+            assert f"codex/{name}" in slugs
 
     def test_available_models_format(self):
         """Available models have expected format and are resolvable."""
         for model in AVAILABLE_MODELS:
             assert model["slug"]
             assert model["name"]
-            assert resolve_model_request(model["slug"]).provider in {"claude", "codex"}
+            assert resolve_model_request(model["slug"]).provider in {
+                "claudecode",
+                "codex",
+                "openrouter",
+            }
 
 
 @pytest.mark.unit
@@ -220,21 +239,21 @@ class TestEdgeCases:
 
     def test_whitespace_handling(self):
         """Leading/trailing whitespace is stripped."""
-        assert resolve_model(" opus ") == "opus"
+        assert resolve_model(" claudecode/opus ") == "opus"
 
     def test_special_characters_after_name(self):
         """Non-alpha characters after name act as word boundary."""
-        assert resolve_model("opus!") == "opus"
-        assert resolve_model("sonnet@") == "sonnet"
+        assert resolve_model("claudecode/opus!") == "opus"
+        assert resolve_model("claudecode/sonnet@") == "sonnet"
 
     def test_unicode_characters(self):
         """Unicode non-alpha characters act as word boundary."""
-        assert resolve_model("opus™") == "opus"
+        assert resolve_model("claudecode/opus™") == "opus"
 
     @pytest.mark.parametrize("model", list(SIMPLE_NAMES))
     def test_all_simple_names_resolvable(self, model):
         """Every simple name is resolvable."""
-        result = resolve_model(model)
+        result = resolve_model(f"claudecode/{model}")
         assert result == model
 
 
@@ -244,32 +263,32 @@ class TestWordBoundaryMatching:
 
     def test_segmented_slug_matches(self):
         """Model name as a segment in a slug resolves correctly."""
-        assert resolve_model("anthropic/claude-opus-4.5") == "opus"
-        assert resolve_model("anthropic/claude-sonnet-4") == "sonnet"
-        assert resolve_model("anthropic/claude-3.5-haiku-20241022") == "haiku"
+        assert resolve_model("claudecode/anthropic/claude-opus-4.5") == "opus"
+        assert resolve_model("claudecode/anthropic/claude-sonnet-4") == "sonnet"
+        assert resolve_model("claudecode/anthropic/claude-3.5-haiku-20241022") == "haiku"
 
     def test_model_name_with_version_suffix(self):
         """Model name followed by version numbers resolves."""
-        assert resolve_model("claude-opus-4") == "opus"
-        assert resolve_model("claude-sonnet-4.5") == "sonnet"
-        assert resolve_model("claude-haiku-3.5") == "haiku"
+        assert resolve_model("claudecode/claude-opus-4") == "opus"
+        assert resolve_model("claudecode/claude-sonnet-4.5") == "sonnet"
+        assert resolve_model("claudecode/claude-haiku-3.5") == "haiku"
 
     def test_model_name_with_underscores(self):
         """Model name separated by underscores resolves."""
-        assert resolve_model("claude_opus_latest") == "opus"
-        assert resolve_model("test_sonnet_model") == "sonnet"
+        assert resolve_model("claudecode/claude_opus_latest") == "opus"
+        assert resolve_model("claudecode/test_sonnet_model") == "sonnet"
 
     def test_model_name_with_dots(self):
         """Model name separated by dots resolves."""
-        assert resolve_model("claude.opus.4") == "opus"
+        assert resolve_model("claudecode/claude.opus.4") == "opus"
 
     def test_embedded_in_longer_word_rejected(self):
         """Model name embedded in a longer word does not match."""
         # 'sonnet' embedded in 'sonnetary' — the 'ary' suffix is alpha, so no boundary
         with pytest.raises(UnsupportedModelError):
-            resolve_model("sonnetary")
+            resolve_model("claudecode/sonnetary")
 
     def test_prefix_alpha_rejected(self):
         """Model name preceded by alpha characters does not match."""
         with pytest.raises(UnsupportedModelError):
-            resolve_model("myopus")
+            resolve_model("claudecode/myopus")

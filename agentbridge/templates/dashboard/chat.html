@@ -238,9 +238,109 @@
             font-size: 12px;
         }
 
+        .message-role {
+            font-weight: 650;
+        }
+
+        .model-badge {
+            min-width: 0;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--surface-muted);
+            color: var(--muted);
+            padding: 3px 7px;
+            font-family: var(--mono);
+            font-size: 11px;
+        }
+
         .message-body {
             white-space: pre-wrap;
             line-height: 1.5;
+        }
+
+        .message-body.markdown {
+            white-space: normal;
+        }
+
+        .message-body.markdown > :first-child {
+            margin-top: 0;
+        }
+
+        .message-body.markdown > :last-child {
+            margin-bottom: 0;
+        }
+
+        .message-body.markdown p,
+        .message-body.markdown ul,
+        .message-body.markdown ol,
+        .message-body.markdown blockquote,
+        .message-body.markdown pre {
+            margin: 0 0 10px;
+        }
+
+        .message-body.markdown ul,
+        .message-body.markdown ol {
+            padding-left: 22px;
+        }
+
+        .message-body.markdown li + li {
+            margin-top: 4px;
+        }
+
+        .message-body.markdown h1,
+        .message-body.markdown h2,
+        .message-body.markdown h3 {
+            margin: 14px 0 8px;
+            color: var(--text);
+            line-height: 1.25;
+        }
+
+        .message-body.markdown h1 {
+            font-size: 18px;
+        }
+
+        .message-body.markdown h2 {
+            font-size: 16px;
+        }
+
+        .message-body.markdown h3 {
+            font-size: 14px;
+        }
+
+        .message-body.markdown blockquote {
+            border-left: 3px solid var(--border-strong);
+            padding-left: 12px;
+            color: var(--muted);
+        }
+
+        .message-body.markdown a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .message-body.markdown a:hover {
+            text-decoration: underline;
+        }
+
+        .message-body.markdown code {
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            background: var(--surface-muted);
+            padding: 1px 4px;
+            font-family: var(--mono);
+            font-size: 12px;
+        }
+
+        .message-body.markdown pre code {
+            display: block;
+            border: 0;
+            background: transparent;
+            padding: 0;
+            white-space: pre;
         }
 
         .message-files {
@@ -366,20 +466,23 @@
         .input-row {
             display: grid;
             grid-template-columns: auto 1fr auto;
-            align-items: end;
+            align-items: center;
             gap: 10px;
             padding: 10px;
         }
 
         textarea {
             width: 100%;
-            min-height: 56px;
+            min-height: 24px;
             max-height: 180px;
-            resize: vertical;
+            resize: none;
+            overflow-y: hidden;
             border: 0;
             outline: 0;
             color: var(--text);
             line-height: 1.5;
+            padding: 1px 0;
+            box-sizing: border-box;
         }
 
         textarea::placeholder {
@@ -440,28 +543,6 @@
             background: var(--surface-muted);
         }
 
-        .controls {
-            border-top: 1px solid var(--border);
-            background: #fbfcfc;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            padding: 8px 10px;
-        }
-
-        .toggle {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            color: var(--muted);
-            font-size: 12px;
-        }
-
-        .toggle input {
-            accent-color: var(--accent);
-        }
-
         .hidden-input {
             position: absolute;
             width: 1px;
@@ -497,10 +578,6 @@
             .primary {
                 grid-column: 1 / -1;
                 width: 100%;
-            }
-            .controls {
-                align-items: stretch;
-                flex-direction: column;
             }
             .secondary {
                 width: 100%;
@@ -553,15 +630,8 @@
                             <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
                         </svg>
                     </button>
-                    <textarea id="prompt" placeholder="Send a test message..." rows="2"></textarea>
+                    <textarea id="prompt" placeholder="Send a test message..." rows="1"></textarea>
                     <button id="send" class="primary" type="button">Send</button>
-                </div>
-                <div class="controls">
-                    <label class="toggle">
-                        <input id="stream" type="checkbox" checked>
-                        Stream
-                    </label>
-                    <button id="copy-curl" class="secondary" type="button">Copy cURL</button>
                 </div>
                 <input id="file-input" class="hidden-input" type="file" multiple accept="image/*,application/pdf">
             </section>
@@ -579,14 +649,22 @@
             var fileInputEl = document.getElementById("file-input");
             var attachButtonEl = document.getElementById("attach-button");
             var promptEl = document.getElementById("prompt");
-            var streamEl = document.getElementById("stream");
             var sendEl = document.getElementById("send");
-            var copyCurlEl = document.getElementById("copy-curl");
             var attachedFiles = [];
-            var lastPayload = null;
+            var modelStreamingSupport = {};
+            var modelLoadTimer = null;
 
             function endpoint(path) {
                 return baseUrlEl.value.replace(/\/$/, "") + path;
+            }
+
+            function supportsStreaming(modelId) {
+                return modelStreamingSupport[modelId] !== false;
+            }
+
+            function scheduleLoadModels() {
+                clearTimeout(modelLoadTimer);
+                modelLoadTimer = setTimeout(loadModels, 250);
             }
 
             function setStatus(kind, label) {
@@ -595,21 +673,184 @@
                 statusEl.textContent = label;
             }
 
+            function autosizePrompt() {
+                promptEl.style.height = "auto";
+                var maxHeight = 180;
+                var nextHeight = Math.min(promptEl.scrollHeight, maxHeight);
+                promptEl.style.height = nextHeight + "px";
+                promptEl.style.overflowY = promptEl.scrollHeight > maxHeight ? "auto" : "hidden";
+            }
+
             function clearEmptyState() {
                 var empty = messagesEl.querySelector(".empty");
                 if (empty) empty.remove();
             }
 
-            function appendMessage(role, text, files) {
+            function escapeHtml(value) {
+                return String(value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            }
+
+            function safeLinkUrl(value) {
+                var url = String(value || "").trim();
+                return /^(https?:\/\/|mailto:)/i.test(url) ? url : "#";
+            }
+
+            function renderInlineMarkdown(text) {
+                var codeTokens = [];
+                var html = escapeHtml(text).replace(/`([^`]+)`/g, function(match, code) {
+                    var token = "\u0000CODE" + codeTokens.length + "\u0000";
+                    codeTokens.push("<code>" + code + "</code>");
+                    return token;
+                });
+
+                html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function(match, label, url) {
+                    var href = escapeHtml(safeLinkUrl(url));
+                    var rel = href === "#" ? "" : " rel=\"noreferrer\" target=\"_blank\"";
+                    return "<a href=\"" + href + "\"" + rel + ">" + label + "</a>";
+                });
+                html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+                html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+
+                codeTokens.forEach(function(tokenHtml, index) {
+                    html = html.replace("\u0000CODE" + index + "\u0000", tokenHtml);
+                });
+                return html;
+            }
+
+            function markdownToHtml(markdown) {
+                var lines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
+                var html = [];
+                var paragraph = [];
+                var listItems = [];
+                var listType = null;
+                var codeLines = [];
+                var inCode = false;
+
+                function flushParagraph() {
+                    if (!paragraph.length) return;
+                    html.push("<p>" + renderInlineMarkdown(paragraph.join(" ")) + "</p>");
+                    paragraph = [];
+                }
+
+                function flushList() {
+                    if (!listItems.length) return;
+                    html.push("<" + listType + ">" + listItems.join("") + "</" + listType + ">");
+                    listItems = [];
+                    listType = null;
+                }
+
+                function flushCode() {
+                    html.push("<pre><code>" + escapeHtml(codeLines.join("\n")) + "</code></pre>");
+                    codeLines = [];
+                }
+
+                lines.forEach(function(line) {
+                    var fenceMatch = line.match(/^```/);
+                    var headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+                    var listMatch = line.match(/^\s*([-*+]|\d+[.)])\s+(.+)$/);
+                    var quoteMatch = line.match(/^>\s?(.*)$/);
+
+                    if (fenceMatch) {
+                        if (inCode) {
+                            flushCode();
+                            inCode = false;
+                        } else {
+                            flushParagraph();
+                            flushList();
+                            inCode = true;
+                        }
+                        return;
+                    }
+
+                    if (inCode) {
+                        codeLines.push(line);
+                        return;
+                    }
+
+                    if (!line.trim()) {
+                        flushParagraph();
+                        flushList();
+                        return;
+                    }
+
+                    if (headingMatch) {
+                        flushParagraph();
+                        flushList();
+                        var level = headingMatch[1].length;
+                        html.push("<h" + level + ">" + renderInlineMarkdown(headingMatch[2]) + "</h" + level + ">");
+                        return;
+                    }
+
+                    if (listMatch) {
+                        flushParagraph();
+                        var nextType = /^\d/.test(listMatch[1]) ? "ol" : "ul";
+                        if (listType && listType !== nextType) flushList();
+                        listType = nextType;
+                        listItems.push("<li>" + renderInlineMarkdown(listMatch[2]) + "</li>");
+                        return;
+                    }
+
+                    if (quoteMatch) {
+                        flushParagraph();
+                        flushList();
+                        html.push("<blockquote>" + renderInlineMarkdown(quoteMatch[1]) + "</blockquote>");
+                        return;
+                    }
+
+                    flushList();
+                    paragraph.push(line.trim());
+                });
+
+                if (inCode) flushCode();
+                flushParagraph();
+                flushList();
+                return html.join("");
+            }
+
+            function renderAssistantMarkdown(target, text) {
+                target.classList.add("markdown");
+                target.dataset.rawMarkdown = text || "";
+                target.innerHTML = markdownToHtml(text);
+            }
+
+            function appendAssistantDelta(target, delta) {
+                renderAssistantMarkdown(target, (target.dataset.rawMarkdown || "") + delta);
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+            }
+
+            function appendMessage(role, text, files, options) {
+                options = options || {};
                 clearEmptyState();
                 var article = document.createElement("article");
                 article.className = "message " + role;
                 var header = document.createElement("div");
                 header.className = "message-header";
-                header.textContent = role === "user" ? "You" : "Assistant";
+
+                var roleLabel = document.createElement("span");
+                roleLabel.className = "message-role";
+                roleLabel.textContent = role === "user" ? "You" : "Assistant";
+                header.appendChild(roleLabel);
+
+                if (role === "assistant" && options.model) {
+                    var modelBadge = document.createElement("span");
+                    modelBadge.className = "model-badge";
+                    modelBadge.title = "Model used for this response";
+                    modelBadge.textContent = options.model;
+                    header.appendChild(modelBadge);
+                }
+
                 var body = document.createElement("div");
                 body.className = "message-body";
-                body.textContent = text || "";
+                if (role === "assistant") {
+                    renderAssistantMarkdown(body, text || "");
+                } else {
+                    body.textContent = text || "";
+                }
                 article.appendChild(header);
                 article.appendChild(body);
 
@@ -826,11 +1067,10 @@
                             var choice = chunk.choices && chunk.choices[0];
                             var delta = choice && choice.delta && choice.delta.content;
                             if (delta) {
-                                target.textContent += delta;
-                                messagesEl.scrollTop = messagesEl.scrollHeight;
+                                appendAssistantDelta(target, delta);
                             }
                         } catch (e) {
-                            target.textContent += data;
+                            appendAssistantDelta(target, data);
                         }
                     });
                 }
@@ -849,12 +1089,12 @@
                     var payload = {
                         model: modelEl.value,
                         messages: [{ role: "user", content: content }],
-                        stream: streamEl.checked
+                        stream: supportsStreaming(modelEl.value)
                     };
-                    lastPayload = payload;
 
                     appendMessage("user", displayTextFromContent(content), filesForMessage);
                     promptEl.value = "";
+                    autosizePrompt();
                     attachedFiles = [];
                     renderAttachedFiles();
 
@@ -872,11 +1112,11 @@
 
                     setStatus("ok", "Healthy");
                     if (payload.stream) {
-                        var target = appendMessage("assistant", "");
+                        var target = appendMessage("assistant", "", null, { model: payload.model });
                         await streamResponse(response, target);
                     } else {
                         var data = await response.json();
-                        appendMessage("assistant", responseText(data));
+                        appendMessage("assistant", responseText(data), null, { model: data.model || payload.model });
                     }
                 } catch (error) {
                     appendError(0, "Request failed", {
@@ -891,29 +1131,6 @@
                 }
             }
 
-            function sanitizePayloadForCurl(payload) {
-                return JSON.parse(JSON.stringify(payload, function(key, value) {
-                    if (key === "url" && typeof value === "string" && value.indexOf("data:") === 0) {
-                        return "[data url omitted]";
-                    }
-                    return value;
-                }));
-            }
-
-            function copyCurl() {
-                var payload = lastPayload || {
-                    model: modelEl.value,
-                    messages: [{ role: "user", content: promptEl.value || "Hello!" }],
-                    stream: streamEl.checked
-                };
-                var curl = [
-                    "curl " + JSON.stringify(endpoint("/chat/completions")) + " \\",
-                    "  -H \"Content-Type: application/json\" \\",
-                    "  -d " + JSON.stringify(JSON.stringify(sanitizePayloadForCurl(payload), null, 2))
-                ].join("\n");
-                navigator.clipboard.writeText(curl);
-            }
-
             async function loadModels() {
                 try {
                     var response = await fetch(endpoint("/models"));
@@ -922,6 +1139,7 @@
                     if (!data.data || !data.data.length) return;
                     modelEl.replaceChildren();
                     data.data.forEach(function(model) {
+                        modelStreamingSupport[model.id] = model.supports_streaming !== false && model.stream !== false;
                         var option = document.createElement("option");
                         option.value = model.id;
                         option.textContent = model.id;
@@ -949,7 +1167,9 @@
                 fileInputEl.value = "";
             });
             sendEl.addEventListener("click", sendMessage);
-            copyCurlEl.addEventListener("click", copyCurl);
+            baseUrlEl.addEventListener("change", loadModels);
+            baseUrlEl.addEventListener("input", scheduleLoadModels);
+            promptEl.addEventListener("input", autosizePrompt);
             promptEl.addEventListener("keydown", function(e) {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") sendMessage();
             });
@@ -972,6 +1192,7 @@
 
             loadModels();
             checkHealth();
+            autosizePrompt();
         })();
     </script>
 </body>

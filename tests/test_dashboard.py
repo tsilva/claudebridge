@@ -396,6 +396,16 @@ class TestDashboardChatPage:
         assert "Drop files to attach" in resp.text
         assert "Copy details" in resp.text
         assert "Server error" in resp.text
+        assert "model-badge" in resp.text
+        assert "markdownToHtml" in resp.text
+        assert "appendAssistantDelta" in resp.text
+        assert 'rows="1"' in resp.text
+        assert "autosizePrompt" in resp.text
+        assert "supportsStreaming" in resp.text
+        assert 'baseUrlEl.addEventListener("change", loadModels)' in resp.text
+        assert 'baseUrlEl.addEventListener("input", scheduleLoadModels)' in resp.text
+        assert "Copy cURL" not in resp.text
+        assert 'id="stream"' not in resp.text
 
 
 @pytest.mark.unit

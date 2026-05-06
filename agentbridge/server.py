@@ -1,4 +1,4 @@
-"""FastAPI server exposing Claude Code SDK and Codex CLI as an OpenAI-compatible API."""
+"""FastAPI server exposing provider adapters as an OpenAI-compatible API."""
 
 import asyncio
 import base64
@@ -8,9 +8,12 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import traceback
+import urllib.error
 import urllib.parse
+import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -542,8 +545,13 @@ CODEX_DEFAULT_REASONING_EFFORT_BY_MODEL: dict[str, ReasoningEffort] = {
 }
 
 
-def _warn_unsupported_params(request: "ChatCompletionRequest") -> None:
+def _warn_unsupported_params(
+    request: "ChatCompletionRequest",
+    provider: str,
+) -> None:
     """Log a warning for unsupported parameters that have a non-None value."""
+    if provider == "openrouter":
+        return
     for param in _UNSUPPORTED_PARAMS:
         if param not in _warned_params:
             value = getattr(request, param, None)
@@ -639,6 +647,13 @@ app.include_router(
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", 120))
 CODEX_TIMEOUT = int(
     os.environ.get("CODEX_TIMEOUT", os.environ.get("CLAUDE_TIMEOUT", 120))
+)
+OPENROUTER_TIMEOUT = int(
+    os.environ.get("OPENROUTER_TIMEOUT", os.environ.get("CLAUDE_TIMEOUT", 120))
+)
+OPENROUTER_API_URL = os.environ.get(
+    "OPENROUTER_API_URL",
+    "https://openrouter.ai/api/v1/chat/completions",
 )
 
 
@@ -1284,6 +1299,332 @@ async def call_codex_cli(
     finally:
         if acquired:
             semaphore.release()
+
+
+def _openrouter_api_key() -> str:
+    """Return the configured OpenRouter API key."""
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is required for openrouter/<model> requests.")
+    return api_key
+
+
+def _openrouter_headers() -> dict[str, str]:
+    """Build OpenRouter HTTP headers."""
+    headers = {
+        "Authorization": f"Bearer {_openrouter_api_key()}",
+        "Content-Type": "application/json",
+        "User-Agent": f"agentbridge/{__version__}",
+    }
+    referer = os.environ.get("OPENROUTER_SITE_URL")
+    title = os.environ.get("OPENROUTER_APP_NAME", "agentbridge")
+    if referer:
+        headers["HTTP-Referer"] = referer
+    if title:
+        headers["X-Title"] = title
+    return headers
+
+
+def _openrouter_payload(
+    request: ChatCompletionRequest,
+    backend_model: str,
+    *,
+    stream: bool,
+) -> dict[str, Any]:
+    """Convert an AgentBridge request into an OpenRouter chat completions payload."""
+    payload = request.model_dump(exclude_none=True)
+    payload["model"] = backend_model
+    payload["stream"] = stream
+    return payload
+
+
+def _openrouter_request(payload: dict[str, Any]) -> urllib.request.Request:
+    """Create an OpenRouter urllib request."""
+    return urllib.request.Request(
+        OPENROUTER_API_URL,
+        data=json.dumps(payload).encode(),
+        headers=_openrouter_headers(),
+        method="POST",
+    )
+
+
+def _openrouter_error_message(exc: urllib.error.HTTPError) -> str:
+    """Read a useful message from an OpenRouter HTTP error."""
+    body = exc.read().decode(errors="replace")
+    if not body:
+        return f"OpenRouter HTTP {exc.code}"
+    try:
+        data = json.loads(body)
+        error = data.get("error") if isinstance(data, dict) else None
+        if isinstance(error, dict):
+            return str(error.get("message") or error)
+        if error:
+            return str(error)
+    except json.JSONDecodeError:
+        pass
+    return body.strip()
+
+
+def _openrouter_post_json(payload: dict[str, Any]) -> dict[str, Any]:
+    """Blocking OpenRouter JSON request for use in asyncio.to_thread()."""
+    try:
+        with urllib.request.urlopen(
+            _openrouter_request(payload),
+            timeout=OPENROUTER_TIMEOUT,
+        ) as response:
+            return json.loads(response.read().decode(errors="replace"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(_openrouter_error_message(exc)) from exc
+
+
+def _message_from_openrouter(data: dict[str, Any]) -> Message:
+    """Convert an OpenRouter assistant message into our response model."""
+    choices = data.get("choices") if isinstance(data.get("choices"), list) else []
+    first = choices[0] if choices else {}
+    raw_message = first.get("message") if isinstance(first, dict) else {}
+    if not isinstance(raw_message, dict):
+        raw_message = {}
+
+    tool_calls = raw_message.get("tool_calls")
+    parsed_tool_calls = None
+    if isinstance(tool_calls, list):
+        parsed_tool_calls = [ToolCall.model_validate(call) for call in tool_calls]
+
+    content = raw_message.get("content")
+    if content is not None and not isinstance(content, str):
+        content = _codex_text_from_content(content)
+
+    return Message(
+        role="assistant",
+        content=content,
+        tool_calls=parsed_tool_calls,
+    )
+
+
+def _usage_from_openrouter(data: dict[str, Any]) -> dict[str, int] | None:
+    """Extract OpenAI-format usage from OpenRouter response JSON."""
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+    total_tokens = int(
+        usage.get("total_tokens", prompt_tokens + completion_tokens) or 0
+    )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+async def call_openrouter_api(
+    request: ChatCompletionRequest,
+    backend_model: str,
+    session_logger: SessionLogger,
+    messages: list[dict] | None = None,
+) -> ClaudeResponse:
+    """Call OpenRouter's Chat Completions API and return a local response container."""
+    request_id = session_logger.request_id
+    dashboard_state.request_started(
+        request_id,
+        request.model,
+        api_key=session_logger.api_key,
+        messages=messages,
+    )
+    response = ClaudeResponse()
+    query_start = time.monotonic()
+
+    try:
+        data = await asyncio.to_thread(
+            _openrouter_post_json,
+            _openrouter_payload(request, backend_model, stream=False),
+        )
+        query_ms = int((time.monotonic() - query_start) * 1000)
+        session_logger.log_timing(0, query_ms)
+
+        message = _message_from_openrouter(data)
+        response.text = message.content or ""
+        response.tool_calls = message.tool_calls or []
+        if response.text:
+            session_logger.log_chunk(response.text)
+        usage = _usage_from_openrouter(data)
+        if usage:
+            response.usage = {
+                "input_tokens": usage["prompt_tokens"],
+                "output_tokens": usage["completion_tokens"],
+            }
+            session_logger.log_usage(
+                usage["prompt_tokens"],
+                usage["completion_tokens"],
+            )
+
+        logging.info(f"[{request_id}] Completed openrouter | query={query_ms}ms")
+        session_logger.log_finish(response.finish_reason)
+        dashboard_state.request_completed(request_id, usage=response.get_usage())
+        return response
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"[{request_id}] OpenRouter {type(e).__name__}: {e}")
+        session_logger.log_error(
+            str(e),
+            exception_type=type(e).__name__,
+            traceback_str=tb,
+        )
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
+        raise
+
+
+async def _openrouter_stream_lines(payload: dict[str, Any]):
+    """Yield blocking OpenRouter SSE lines without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    sentinel = object()
+
+    def _worker() -> None:
+        try:
+            with urllib.request.urlopen(
+                _openrouter_request(payload),
+                timeout=OPENROUTER_TIMEOUT,
+            ) as response:
+                for raw_line in response:
+                    line = raw_line.decode(errors="replace").strip()
+                    if not line:
+                        continue
+                    asyncio.run_coroutine_threadsafe(queue.put(line), loop).result()
+        except urllib.error.HTTPError as exc:
+            asyncio.run_coroutine_threadsafe(
+                queue.put(RuntimeError(_openrouter_error_message(exc))),
+                loop,
+            ).result()
+        except Exception as exc:
+            asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result()
+        finally:
+            asyncio.run_coroutine_threadsafe(queue.put(sentinel), loop).result()
+
+    threading.Thread(target=_worker, daemon=True).start()
+    while True:
+        item = await queue.get()
+        if item is sentinel:
+            break
+        if isinstance(item, BaseException):
+            raise item
+        yield item
+
+
+def _openrouter_delta_text(chunk: dict[str, Any]) -> str:
+    """Extract text deltas from an OpenRouter stream chunk."""
+    choices = chunk.get("choices") if isinstance(chunk.get("choices"), list) else []
+    parts: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            text = delta.get("content")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
+async def stream_openrouter_api(
+    request: ChatCompletionRequest,
+    backend_model: str,
+    request_id: str,
+    session_logger: SessionLogger,
+    messages: list[dict] | None = None,
+):
+    """Stream OpenRouter SSE as OpenAI-compatible chunks."""
+    dashboard_state.request_started(
+        request_id,
+        request.model,
+        api_key=session_logger.api_key,
+        messages=messages,
+    )
+    created = int(time.time())
+    finish_reason = "stop"
+    stream_usage: Usage | None = None
+    _dashboard_handled = False
+    query_start = time.monotonic()
+
+    initial_chunk = ChatCompletionChunk(
+        id=request_id,
+        created=created,
+        model=request.model,
+        choices=[StreamChoice(delta=DeltaMessage(role="assistant", content=""))],
+    )
+    yield f"data: {initial_chunk.model_dump_json()}\n\n"
+
+    try:
+        payload = _openrouter_payload(request, backend_model, stream=True)
+        async for line in _openrouter_stream_lines(payload):
+            if line.startswith("data:"):
+                line = line.removeprefix("data:").strip()
+            if line == "[DONE]":
+                break
+            if not line:
+                continue
+            chunk = json.loads(line)
+            if not isinstance(chunk, dict):
+                continue
+            chunk["model"] = request.model
+            chunk.setdefault("id", request_id)
+            chunk.setdefault("created", created)
+            chunk.setdefault("object", "chat.completion.chunk")
+
+            usage = _usage_from_openrouter(chunk)
+            if usage:
+                stream_usage = Usage(**usage)
+                session_logger.log_usage(
+                    usage["prompt_tokens"],
+                    usage["completion_tokens"],
+                )
+
+            text = _openrouter_delta_text(chunk)
+            if text:
+                session_logger.log_chunk(text)
+                dashboard_state.chunk_received(request_id, text)
+
+            for choice in chunk.get("choices", []):
+                if isinstance(choice, dict) and choice.get("finish_reason"):
+                    finish_reason = str(choice["finish_reason"])
+
+            yield f"data: {json.dumps(chunk)}\n\n"
+
+        query_ms = int((time.monotonic() - query_start) * 1000)
+        session_logger.log_timing(0, query_ms)
+        usage_dict = stream_usage.model_dump() if stream_usage else {}
+        logging.info(f"[{request_id}] Completed openrouter | query={query_ms}ms")
+        session_logger.log_finish(finish_reason)
+        dashboard_state.request_completed(request_id, usage=usage_dict)
+        _dashboard_handled = True
+        yield "data: [DONE]\n\n"
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"[{request_id}] OpenRouter {type(e).__name__}: {e}")
+        session_logger.log_error(
+            str(e),
+            exception_type=type(e).__name__,
+            traceback_str=tb,
+        )
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
+        _dashboard_handled = True
+        error_chunk = ChatCompletionChunk(
+            id=request_id,
+            created=created,
+            model=request.model,
+            choices=[
+                StreamChoice(
+                    delta=DeltaMessage(content="\n\n[Error: OpenRouter request failed.]"),
+                    finish_reason=None,
+                )
+            ],
+        )
+        yield f"data: {error_chunk.model_dump_json()}\n\n"
+        yield "data: [DONE]\n\n"
+    finally:
+        if not _dashboard_handled:
+            dashboard_state.request_errored(request_id, "Request cancelled")
 
 
 async def call_claude_sdk(
@@ -1937,8 +2278,8 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     """OpenAI-compatible chat completions endpoint.
 
     Note: Concurrency is managed by the client pool (POOL_SIZE env var).
-    Model selection supports OpenRouter-style slugs (e.g., anthropic/claude-sonnet-4),
-    simple Claude names (opus, sonnet, haiku), and Codex/OpenAI model identifiers.
+    Model selection requires provider namespaces:
+    claudecode/<model>, codex/<model>, or openrouter/<provider>/<model>.
     Model parameter is required.
 
     Tool calling is supported via the `tools` and `tool_choice` parameters.
@@ -1950,7 +2291,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
     codex_reasoning_effort = _resolve_codex_reasoning_effort(request, model_resolution)
 
     # Warn about unsupported params (once per param)
-    _warn_unsupported_params(request)
+    _warn_unsupported_params(request, model_resolution.provider)
 
     request_id = f"chatcmpl-{uuid4().hex[:12]}"
     auth = http_request.headers.get("authorization", "")
@@ -1970,13 +2311,8 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
 
         async def stream_with_logging():
             try:
-                stream_fn = (
-                    stream_claude_sdk
-                    if model_resolution.provider == "claude"
-                    else stream_codex_cli
-                )
                 if model_resolution.provider == "codex":
-                    async for chunk in stream_fn(
+                    async for chunk in stream_codex_cli(
                         prompt,
                         request.model,
                         request_id,
@@ -1986,13 +2322,22 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
                         reasoning_effort=codex_reasoning_effort,
                     ):
                         yield chunk
-                else:
-                    async for chunk in stream_fn(
+                elif model_resolution.provider == "claudecode":
+                    async for chunk in stream_claude_sdk(
                         prompt,
                         request.model,
                         request_id,
                         session_logger,
                         request.tools,
+                        messages=dash_messages,
+                    ):
+                        yield chunk
+                else:
+                    async for chunk in stream_openrouter_api(
+                        request,
+                        model_resolution.model,
+                        request_id,
+                        session_logger,
                         messages=dash_messages,
                     ):
                         yield chunk
@@ -2015,7 +2360,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
         )
 
     try:
-        if model_resolution.provider == "claude":
+        if model_resolution.provider == "claudecode":
             response = await call_claude_sdk(
                 prompt,
                 request.model,
@@ -2023,7 +2368,7 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
                 request.tools,
                 messages=dash_messages,
             )
-        else:
+        elif model_resolution.provider == "codex":
             response = await call_codex_cli(
                 prompt,
                 request.model,
@@ -2031,6 +2376,13 @@ async def chat_completions(request: ChatCompletionRequest, http_request: Request
                 request.tools,
                 messages=dash_messages,
                 reasoning_effort=codex_reasoning_effort,
+            )
+        else:
+            response = await call_openrouter_api(
+                request,
+                model_resolution.model,
+                session_logger,
+                messages=dash_messages,
             )
     finally:
         session_logger.write(

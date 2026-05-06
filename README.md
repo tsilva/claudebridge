@@ -1,14 +1,14 @@
 <div align="center">
   <img src="./logo.png" alt="agentbridge" width="512" />
 
-  **🌉 Bridge OpenAI tools to Claude Code SDK or Codex CLI — use your subscriptions anywhere 🔌**
+  **🌉 Bridge OpenAI tools to Claude Code SDK, Codex CLI, or OpenRouter — use your subscriptions anywhere 🔌**
 </div>
 
-agentbridge is a local OpenAI-compatible API server for Claude Code SDK and Codex CLI. It lets tools that already speak the OpenAI Chat Completions API use your active Claude Code or Codex login through `http://localhost:8082/api/v1`.
+agentbridge is a local OpenAI-compatible API server with provider adapters for Claude Code SDK, Codex CLI, and OpenRouter. It lets tools that already speak the OpenAI Chat Completions API use your active local logins or OpenRouter API key through `http://localhost:8082/api/v1`.
 
-It supports non-streaming and streaming chat completions, multimodal image/PDF inputs for Claude, image inputs for Codex, OpenRouter-style model slugs, a small live dashboard, and JSON session logs for debugging.
+It supports non-streaming and streaming chat completions, multimodal image/PDF inputs for Claude, image inputs for Codex, namespaced provider model IDs, a small live dashboard, and JSON session logs for debugging.
 
-> **Legal notice:** agentbridge uses Claude Code SDK and Codex CLI access through your local subscriptions, not the Anthropic or OpenAI APIs directly. Whether this is allowed under the relevant service terms is your responsibility to evaluate. Use it conservatively and at your own risk.
+> **Legal notice:** agentbridge can use Claude Code SDK and Codex CLI access through your local subscriptions, and can also forward requests to OpenRouter when configured. Whether this is allowed under the relevant service terms is your responsibility to evaluate. Use it conservatively and at your own risk.
 
 ## Install
 
@@ -35,13 +35,20 @@ agentbridge
 ```bash
 curl http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "sonnet", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "claudecode/sonnet", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 ```bash
 curl http://localhost:8082/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "openai/gpt-5.5", "reasoning_effort": "high", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "codex/gpt-5.5", "reasoning_effort": "high", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+```bash
+OPENROUTER_API_KEY=sk-or-... agentbridge
+curl http://localhost:8082/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "openrouter/anthropic/claude-sonnet-4", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 ```python
@@ -53,15 +60,21 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="anthropic/claude-sonnet-4",
+    model="claudecode/anthropic/claude-sonnet-4",
     messages=[{"role": "user", "content": "Hello!"}],
 )
 print(response.choices[0].message.content)
 
 response = client.chat.completions.create(
-    model="openai/gpt-5.5",
+    model="codex/gpt-5.5",
     reasoning_effort="high",
     messages=[{"role": "user", "content": "Hello from Codex!"}],
+)
+print(response.choices[0].message.content)
+
+response = client.chat.completions.create(
+    model="openrouter/anthropic/claude-sonnet-4",
+    messages=[{"role": "user", "content": "Hello from OpenRouter!"}],
 )
 print(response.choices[0].message.content)
 ```
@@ -91,11 +104,13 @@ No PyPI API token is required. The workflow builds the package, verifies the bui
 
 ## Notes
 
-- Requires Python 3.12+ and at least one authenticated backend: `claude login` for Claude models or `codex login` for Codex models.
+- Requires Python 3.12+ and at least one authenticated backend: `claude login` for Claude Code models, `codex login` for Codex models, or `OPENROUTER_API_KEY` for OpenRouter models.
 - Endpoints: `POST /api/v1/chat/completions`, `GET /api/v1/models`, `GET /health`, `/dashboard`, and `/dashboard/chat`.
-- Claude model inputs are `opus`, `sonnet`, `haiku`, or slugs containing those names, such as `anthropic/claude-sonnet-4`.
-- Codex model inputs are `openai/<model>`, `codex/<model>`, or bare `gpt-5...` model IDs. The requested model is passed directly to Codex CLI; `gpt-5.5` defaults to `reasoning_effort="high"` unless the request sets another effort.
-- `PORT`, `POOL_SIZE`, `CLAUDE_TIMEOUT`, `CODEX_TIMEOUT`, `LOG_DIR`, and `MAX_LOG_FILES` control local runtime behavior.
+- Model IDs must be prefixed with an AgentBridge provider namespace: `claudecode/<model>`, `codex/<model>`, or `openrouter/<provider>/<model>`.
+- Claude Code model inputs are `claudecode/opus`, `claudecode/sonnet`, `claudecode/haiku`, or namespaced slugs containing those names, such as `claudecode/anthropic/claude-sonnet-4`.
+- Codex model inputs are `codex/<model>`. The requested model is passed directly to Codex CLI; `codex/gpt-5.5` defaults to `reasoning_effort="high"` unless the request sets another effort.
+- OpenRouter model inputs are `openrouter/<provider>/<model>`, for example `openrouter/anthropic/claude-sonnet-4`. The upstream model ID after `openrouter/` is passed to OpenRouter.
+- `PORT`, `POOL_SIZE`, `CLAUDE_TIMEOUT`, `CODEX_TIMEOUT`, `OPENROUTER_TIMEOUT`, `OPENROUTER_API_KEY`, `LOG_DIR`, and `MAX_LOG_FILES` control local runtime behavior.
 - Each Claude request gets a fresh or pre-warmed Claude SDK client and the client is destroyed after use. Each Codex request runs an ephemeral `codex exec` process in an isolated temporary directory.
 - Claude Code tools are disabled for SDK sessions. Codex runs with read-only sandboxing, no approvals, ephemeral sessions, and ignored project rules. OpenAI-style function calling is emulated by prompting for JSON tool-call output.
 - Session logs are written as JSON under `logs/sessions` by default; base64 image and PDF attachments are saved beside their request logs.

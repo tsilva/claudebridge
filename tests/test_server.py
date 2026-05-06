@@ -27,8 +27,11 @@ from agentbridge.models import (
 from agentbridge.server import (
     ClaudeResponse,
     _build_codex_command,
+    _message_from_openrouter,
+    _openrouter_payload,
     _parse_codex_json_lines,
     _resolve_codex_reasoning_effort,
+    _usage_from_openrouter,
     app,
     build_tool_prompt,
     extract_text_from_content,
@@ -407,7 +410,7 @@ class TestCodexHelpers:
     def test_gpt55_defaults_to_high_reasoning_effort(self):
         """gpt-5.5 Codex requests default to high reasoning."""
         request = ChatCompletionRequest(
-            model="openai/gpt-5.5",
+            model="codex/gpt-5.5",
             messages=[Message(role="user", content="Hello")],
         )
         resolution = resolve_model_request(request.model)
@@ -417,13 +420,64 @@ class TestCodexHelpers:
     def test_request_reasoning_effort_overrides_gpt55_default(self):
         """Explicit reasoning_effort wins over the gpt-5.5 default."""
         request = ChatCompletionRequest(
-            model="openai/gpt-5.5",
+            model="codex/gpt-5.5",
             messages=[Message(role="user", content="Hello")],
             reasoning_effort="medium",
         )
         resolution = resolve_model_request(request.model)
 
         assert _resolve_codex_reasoning_effort(request, resolution) == "medium"
+
+
+@pytest.mark.unit
+class TestOpenRouterHelpers:
+    """Tests for OpenRouter adapter helper functions."""
+
+    def test_openrouter_payload_uses_backend_model(self):
+        """OpenRouter payload strips the AgentBridge namespace."""
+        request = ChatCompletionRequest(
+            model="openrouter/anthropic/claude-sonnet-4",
+            messages=[Message(role="user", content="Hello")],
+            temperature=0.2,
+        )
+
+        payload = _openrouter_payload(
+            request,
+            "anthropic/claude-sonnet-4",
+            stream=False,
+        )
+
+        assert payload["model"] == "anthropic/claude-sonnet-4"
+        assert payload["stream"] is False
+        assert payload["temperature"] == 0.2
+
+    def test_openrouter_message_and_usage_parse(self):
+        """OpenRouter response JSON maps into local message and usage models."""
+        data = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello back",
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 2,
+                "total_tokens": 5,
+            },
+        }
+
+        message = _message_from_openrouter(data)
+        usage = _usage_from_openrouter(data)
+
+        assert message.content == "Hello back"
+        assert usage == {
+            "prompt_tokens": 3,
+            "completion_tokens": 2,
+            "total_tokens": 5,
+        }
 
 
 @pytest.mark.unit
@@ -536,14 +590,15 @@ class TestModelsEndpoint:
         assert len(data["data"]) > 0
 
     def test_models_have_openrouter_format(self, test_client):
-        """Models include Claude and Codex slugs."""
+        """Models include namespaced Claude Code, Codex, and OpenRouter slugs."""
         response = test_client.get("/api/v1/models")
         data = response.json()
         ids = {model["id"] for model in data["data"]}
-        assert "openai/gpt-5.5" in ids
+        assert "codex/gpt-5.5" in ids
         assert "codex" not in ids
-        assert any(model_id.startswith("anthropic/claude-") for model_id in ids)
-        assert any(model_id.startswith("openai/") for model_id in ids)
+        assert any(model_id.startswith("claudecode/") for model_id in ids)
+        assert any(model_id.startswith("codex/") for model_id in ids)
+        assert any(model_id.startswith("openrouter/") for model_id in ids)
         for model in data["data"]:
             assert model["object"] == "model"
 
@@ -564,7 +619,7 @@ class TestChatCompletionsValidation:
         """Missing messages returns 400 error (custom validation error handler)."""
         response = test_client.post(
             "/api/v1/chat/completions",
-            json={"model": "sonnet"},
+            json={"model": "claudecode/sonnet"},
         )
         assert response.status_code == 400  # Custom handler converts 422 → 400
 
@@ -588,7 +643,7 @@ class TestChatCompletionsValidation:
         # Note: This tests Pydantic validation, not business logic
         test_client.post(
             "/api/v1/chat/completions",
-            json={"model": "sonnet", "messages": []},
+            json={"model": "claudecode/sonnet", "messages": []},
         )
         # Empty messages might be accepted by validation
         # The actual error would come from the SDK call
@@ -598,7 +653,7 @@ class TestChatCompletionsValidation:
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "model": "sonnet",
+                "model": "claudecode/sonnet",
                 "messages": [{"role": "user", "content": "Hi"}],
                 "temperature": 0.5,
                 "seed": 42,

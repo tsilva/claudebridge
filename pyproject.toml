@@ -1,7 +1,7 @@
 [project]
 name = "agentbridge-py"
 version = "0.1.8"
-description = "Bridge OpenAI tools to Claude Code SDK and Codex CLI"
+description = "Bridge OpenAI tools to Claude Code SDK, Codex CLI, and OpenRouter"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "tsilva"}]

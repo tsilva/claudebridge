@@ -1,4 +1,4 @@
-"""OpenAI-compatible request/response models and model mapping."""
+"""OpenAI-compatible request/response models and provider model mapping."""
 
 import re
 from dataclasses import dataclass
@@ -165,7 +165,7 @@ class ErrorResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Model mapping (OpenRouter slug → provider model identifier)
+# Provider model mapping
 # ---------------------------------------------------------------------------
 
 # Simple names that map directly to Claude Code model identifiers
@@ -173,6 +173,8 @@ CLAUDE_SIMPLE_NAMES: set[str] = {"opus", "sonnet", "haiku"}
 
 # Backwards-compatible export used by tests and callers.
 SIMPLE_NAMES = CLAUDE_SIMPLE_NAMES
+
+PROVIDER_NAMES: set[str] = {"claudecode", "codex", "openrouter"}
 
 CODEX_MODEL_SLUGS: set[str] = {
     "gpt-5.5",
@@ -182,34 +184,47 @@ CODEX_MODEL_SLUGS: set[str] = {
     "gpt-5.3-codex-spark",
     "gpt-5.2",
 }
-OPENAI_PROVIDER_PREFIXES = ("openai/", "codex/")
+
+OPENROUTER_EXAMPLE_SLUGS: set[str] = {
+    "anthropic/claude-opus-4",
+    "anthropic/claude-sonnet-4",
+    "openai/gpt-5",
+}
 
 
 @dataclass(frozen=True)
 class ModelResolution:
     """Resolved provider and backend model identifier."""
 
-    provider: Literal["claude", "codex"]
-    model: str | None
+    provider: Literal["claudecode", "codex", "openrouter"]
+    model: str
 
 # Word-boundary pattern for matching model names in slugs
 _MODEL_PATTERN = re.compile(
     r'(?:^|[^a-zA-Z])(' + '|'.join(sorted(CLAUDE_SIMPLE_NAMES)) + r')(?:[^a-zA-Z]|$)',
     re.IGNORECASE,
 )
-# Available models for /api/v1/models endpoint (OpenRouter-style where applicable)
+# Available models for /api/v1/models endpoint.
 AVAILABLE_MODELS: list[dict[str, str]] = [
     *[
         {
-            "slug": f"anthropic/claude-{name}",
+            "slug": f"claudecode/{name}",
             "name": f"Claude {name.capitalize()}",
             "owned_by": "claude-code",
         }
         for name in sorted(CLAUDE_SIMPLE_NAMES)
     ],
     *[
-        {"slug": f"openai/{name}", "name": name.upper(), "owned_by": "codex-cli"}
+        {"slug": f"codex/{name}", "name": name.upper(), "owned_by": "codex-cli"}
         for name in sorted(CODEX_MODEL_SLUGS)
+    ],
+    *[
+        {
+            "slug": f"openrouter/{name}",
+            "name": name,
+            "owned_by": "openrouter",
+        }
+        for name in sorted(OPENROUTER_EXAMPLE_SLUGS)
     ],
 ]
 
@@ -221,21 +236,20 @@ class UnsupportedModelError(ValueError):
         self.model = model
         super().__init__(
             f"Unsupported model: '{model}'. "
-            f"Supported Claude models: {', '.join(sorted(CLAUDE_SIMPLE_NAMES))}, "
-            "or slugs containing 'opus', 'sonnet', or 'haiku'. "
-            "Supported Codex models: openai/<model>, codex/<model>, "
-            "or bare gpt-5* model identifiers."
+            "Model IDs must start with a provider namespace. "
+            "Use claudecode/<opus|sonnet|haiku>, codex/<model>, "
+            "or openrouter/<provider>/<model>."
         )
 
 
 def resolve_model_request(model: str) -> ModelResolution:
-    """Resolve an OpenRouter-style slug or simple name to a backend provider.
+    """Resolve a namespaced model ID to a backend provider.
 
-    Uses word-boundary matching to prevent false positives. Model names must appear
-    as distinct segments separated by non-alpha characters (/, -, _, ., etc.).
+    Model IDs must begin with an AgentBridge provider namespace:
+    claudecode/<model>, codex/<model>, or openrouter/<provider>/<model>.
 
     Args:
-        model: Model identifier (OpenRouter slug or simple name)
+        model: Namespaced model identifier.
 
     Returns:
         Provider and backend model identifier.
@@ -244,26 +258,33 @@ def resolve_model_request(model: str) -> ModelResolution:
         UnsupportedModelError: If model is not recognized
     """
     model_stripped = model.strip()
-    model_lower = model_stripped.lower()
 
-    # Already a simple Claude Code name (exact match)
-    if model_lower in CLAUDE_SIMPLE_NAMES:
-        return ModelResolution(provider="claude", model=model_lower)
+    provider, sep, provider_model = model_stripped.partition("/")
+    if not sep:
+        raise UnsupportedModelError(model)
 
-    for prefix in OPENAI_PROVIDER_PREFIXES:
-        if model_lower.startswith(prefix):
-            provider_model = model_stripped[len(prefix):].strip()
-            if not provider_model or provider_model.lower() == "codex":
-                raise UnsupportedModelError(model)
-            return ModelResolution(provider="codex", model=provider_model)
+    provider_lower = provider.lower()
+    provider_model = provider_model.strip()
+    provider_model_lower = provider_model.lower()
 
-    if model_lower.startswith("gpt-5"):
-        return ModelResolution(provider="codex", model=model_stripped)
+    if provider_lower not in PROVIDER_NAMES or not provider_model:
+        raise UnsupportedModelError(model)
+
+    if provider_lower == "codex":
+        return ModelResolution(provider="codex", model=provider_model)
+
+    if provider_lower == "openrouter":
+        if "/" not in provider_model:
+            raise UnsupportedModelError(model)
+        return ModelResolution(provider="openrouter", model=provider_model)
+
+    if provider_model_lower in CLAUDE_SIMPLE_NAMES:
+        return ModelResolution(provider="claudecode", model=provider_model_lower)
 
     # Word-boundary match: find model name as a distinct segment in the slug
-    match = _MODEL_PATTERN.search(model_lower)
+    match = _MODEL_PATTERN.search(provider_model_lower)
     if match:
-        return ModelResolution(provider="claude", model=match.group(1).lower())
+        return ModelResolution(provider="claudecode", model=match.group(1).lower())
 
     # Unknown model - raise error
     raise UnsupportedModelError(model)
@@ -276,4 +297,4 @@ def resolve_model(model: str) -> str:
     provider is needed.
     """
     resolution = resolve_model_request(model)
-    return resolution.model or model.strip()
+    return resolution.model
