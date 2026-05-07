@@ -435,6 +435,29 @@ class TestDashboardPool:
         assert "text/html" in resp.headers["content-type"]
         assert "pool-dot" in resp.text
 
+    def test_lazy_empty_pool_shows_capacity_available(self):
+        """A lazily initialized empty pool still has request capacity."""
+        app = _make_app(
+            pool_status_fn=lambda: {"size": 1, "available": 0, "in_use": 0}
+        )
+        client = TestClient(app)
+        resp = client.get("/dashboard/pool")
+        assert resp.status_code == 200
+        assert "Healthy" in resp.text
+        assert "1/1 capacity" in resp.text
+        assert "Busy" not in resp.text
+
+    def test_pool_at_capacity_shows_busy(self):
+        """Pool status reports busy only when all worker capacity is in use."""
+        app = _make_app(
+            pool_status_fn=lambda: {"size": 1, "available": 0, "in_use": 1}
+        )
+        client = TestClient(app)
+        resp = client.get("/dashboard/pool")
+        assert resp.status_code == 200
+        assert "Busy" in resp.text
+        assert "0/1 capacity" in resp.text
+
 
 @pytest.mark.unit
 class TestDashboardRequests:

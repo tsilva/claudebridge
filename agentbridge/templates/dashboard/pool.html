@@ -1,9 +1,11 @@
+{% set capacity_available = size - in_use %}
+{% set at_capacity = size > 0 and capacity_available <= 0 %}
 <div class="pool-status">
-    <span class="pool-health{% if available == 0 %} error{% endif %}">
-        <span class="pool-dot {% if available > 0 %}available{% else %}empty{% endif %}"></span>
-        {% if available > 0 %}Healthy{% else %}Busy{% endif %}
+    <span class="pool-health{% if at_capacity %} error{% endif %}">
+        <span class="pool-dot {% if at_capacity %}empty{% else %}available{% endif %}"></span>
+        {% if at_capacity %}Busy{% else %}Healthy{% endif %}
     </span>
-    <span class="pool-count">{{ available }}/{{ size }} available</span>
+    <span class="pool-count">{{ [capacity_available, 0]|max }}/{{ size }} capacity</span>
     <span class="pool-dots" aria-hidden="true">
         {% for i in range(size) %}
             {% if i < in_use %}
