@@ -111,7 +111,7 @@ No PyPI API token is required. The workflow builds the package, verifies the bui
 - Codex model inputs are `codex/<model>`. The requested model is passed directly to Codex CLI; `codex/gpt-5.5` defaults to `reasoning_effort="high"` unless the request sets another effort.
 - OpenRouter model inputs are `openrouter/<provider>/<model>`, for example `openrouter/anthropic/claude-sonnet-4`. The upstream model ID after `openrouter/` is passed to OpenRouter.
 - `PORT`, `POOL_SIZE`, `CLAUDE_TIMEOUT`, `CODEX_TIMEOUT`, `OPENROUTER_TIMEOUT`, `OPENROUTER_API_KEY`, `LOG_DIR`, and `MAX_LOG_FILES` control local runtime behavior.
-- Each Claude request gets a fresh or pre-warmed Claude SDK client and the client is destroyed after use. Each Codex request runs an ephemeral `codex exec` process in an isolated temporary directory.
+- Claude SDK clients are created lazily for the requested model and reused from an idle pool capped by `POOL_SIZE`; no Claude clients are warmed at server boot. Each Codex request runs an ephemeral `codex exec` process in an isolated temporary directory.
 - Claude Code tools are disabled for SDK sessions. Codex runs with read-only sandboxing, no approvals, ephemeral sessions, and ignored project rules. OpenAI-style function calling is emulated by prompting for JSON tool-call output.
 - Session logs are written as JSON under `logs/sessions` by default; base64 image and PDF attachments are saved beside their request logs.
 

@@ -537,7 +537,7 @@ _UNSUPPORTED_PARAMS = {
     "temperature", "top_p", "frequency_penalty", "presence_penalty",
     "stop", "n", "seed", "response_format", "logit_bias", "logprobs",
     "top_logprobs", "parallel_tool_calls", "stream_options", "user",
-    "max_tokens",  # Accepted but not supported: pool pre-warms clients without this
+    "max_tokens",  # Accepted but not supported by Claude SDK client options here
 }
 
 CODEX_DEFAULT_REASONING_EFFORT_BY_MODEL: dict[str, ReasoningEffort] = {
@@ -618,14 +618,6 @@ async def lifespan(app: FastAPI):
     _pool_lock = asyncio.Lock()
     codex_semaphore = asyncio.Semaphore(_pool_size)
 
-    if os.environ.get("AGENTBRIDGE_PREWARM_CLAUDE", "1") != "0":
-        try:
-            await ensure_claude_pool()
-        except Exception as e:
-            logging.warning(
-                f"Claude pool pre-warm failed; Codex requests can still run: {e}"
-            )
-
     yield
     if pool is not None:
         await pool.shutdown()
@@ -639,7 +631,7 @@ app.include_router(
         dashboard_state,
         pool_status_fn=lambda: pool.status()
         if pool
-        else {"size": 0, "available": 0, "in_use": 0, "models": []},
+        else {"size": _pool_size, "available": 0, "in_use": 0, "models": []},
     )
 )
 
@@ -929,12 +921,14 @@ def apply_tool_prompt(prompt: str | list[dict], tools: list[Tool]) -> str | list
     return result
 
 
-async def send_query(client, prompt: str | list[dict]) -> None:
+async def send_query(
+    client, prompt: str | list[dict], session_id: str = "default"
+) -> None:
     """Send a query to a Claude client, handling multimodal vs string dispatch."""
     if isinstance(prompt, list):
-        await client.query(make_multimodal_prompt(prompt))
+        await client.query(make_multimodal_prompt(prompt), session_id=session_id)
     else:
-        await client.query(prompt)
+        await client.query(prompt, session_id=session_id)
 
 
 class ClaudeResponse:
@@ -1646,8 +1640,8 @@ async def call_claude_sdk(
         ClaudeResponse containing text and/or tool calls
 
     Model selection: OpenRouter-style slugs or simple names (opus/sonnet/haiku)
-    are resolved to Claude Code model identifiers. Pool replaces clients
-    on-demand when a different model is requested.
+    are resolved to Claude Code model identifiers. The pool lazily creates and
+    reuses clients by model, evicting idle clients only when the max size is full.
 
     Note: Function calling is emulated by prompting for JSON output since the
     Claude Agent SDK doesn't support custom tool definitions.
@@ -1678,7 +1672,7 @@ async def call_claude_sdk(
         async with claude_pool.acquire(resolved_model, request_id=request_id) as client:
             _acquire_ms = int((time.monotonic() - acquire_start) * 1000)
             _query_start = time.monotonic()
-            await send_query(client, effective_prompt)
+            await send_query(client, effective_prompt, session_id=request_id)
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
@@ -1788,8 +1782,8 @@ async def stream_claude_sdk(
         tools: Optional list of tool definitions for function calling
 
     Model selection: OpenRouter-style slugs or simple names (opus/sonnet/haiku)
-    are resolved to Claude Code model identifiers. Pool replaces clients
-    on-demand when a different model is requested.
+    are resolved to Claude Code model identifiers. The pool lazily creates and
+    reuses clients by model, evicting idle clients only when the max size is full.
 
     Note: When tools are provided, we buffer the response to parse JSON at the end
     since we're emulating function calling through prompting.
@@ -1833,7 +1827,7 @@ async def stream_claude_sdk(
             acquire_ms = int((time.monotonic() - acquire_start) * 1000)
             query_start = time.monotonic()
             async with asyncio.timeout(CLAUDE_TIMEOUT):
-                await send_query(client, effective_prompt)
+                await send_query(client, effective_prompt, session_id=request_id)
                 async for msg in client.receive_response():
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
@@ -2441,7 +2435,7 @@ def get_version() -> str:
     return f"{__version__} ({GIT_HASH})"
 
 
-def _print_banner(port: int, workers: int, model: str, timeout: int) -> None:
+def _print_banner(port: int, workers: int, timeout: int) -> None:
     """Print clean startup banner with ASCII art bridge and colors."""
     version = get_version()
     print(f"\n  {_CLAUDE}   ╭───╮       ╭───╮{_RESET}")
@@ -2450,7 +2444,7 @@ def _print_banner(port: int, workers: int, model: str, timeout: int) -> None:
     print(f"  {_BOLD}{_CLAUDE}agentbridge{_RESET} {_DIM}v{version}{_RESET}\n")
     print(f"  {_DIM}Dashboard{_RESET}  {_CLAUDE}http://127.0.0.1:{port}/dashboard{_RESET}")
     print(f"  {_DIM}API{_RESET}        {_CLAUDE}http://127.0.0.1:{port}/api/v1{_RESET}")
-    print(f"  {_DIM}Workers{_RESET}    {_BOLD}{workers}{_RESET} {_DIM}({model}){_RESET}")
+    print(f"  {_DIM}Workers{_RESET}    {_BOLD}{workers}{_RESET}")
     print(f"  {_DIM}Timeout{_RESET}    {timeout}s")
     print()
 
@@ -2491,7 +2485,7 @@ def main():
     os.environ["POOL_SIZE"] = str(args.workers)
 
     _configure_logging()
-    _print_banner(args.port, args.workers, "opus", timeout)
+    _print_banner(args.port, args.workers, timeout)
 
     # Suppress uvicorn's default INFO noise
     uvicorn.run(

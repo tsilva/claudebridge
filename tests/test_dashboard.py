@@ -402,8 +402,22 @@ class TestDashboardChatPage:
         assert 'rows="1"' in resp.text
         assert "autosizePrompt" in resp.text
         assert "supportsStreaming" in resp.text
+        assert 'class="main-nav"' in resp.text
+        assert 'class="nav-item" href="/dashboard">Monitor</a>' in resp.text
+        assert 'class="nav-item active" href="/dashboard/chat">Chat Tester</a>' in resp.text
+        assert 'if (e.key !== "Enter" || e.isComposing) return;' in resp.text
+        assert "if (e.altKey) return;" in resp.text
+        assert "e.preventDefault();" in resp.text
+        assert 'aria-label="Send message"' in resp.text
+        assert '<button id="send" class="primary" type="button">Send</button>' not in resp.text
+        assert "typing-indicator" in resp.text
+        assert "Assistant is typing" in resp.text
+        assert 'loading: true' in resp.text
         assert 'baseUrlEl.addEventListener("change", loadModels)' in resp.text
         assert 'baseUrlEl.addEventListener("input", scheduleLoadModels)' in resp.text
+        assert "var conversationMessages = []" in resp.text
+        assert "messages: conversationMessages.concat([userMessage])" in resp.text
+        assert 'conversationMessages.push({ role: "assistant", content: assistantText })' in resp.text
         assert "Copy cURL" not in resp.text
         assert 'id="stream"' not in resp.text
 

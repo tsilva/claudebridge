@@ -1,5 +1,5 @@
 """
-Unit tests for single-use client pool.
+Unit tests for lazy reusable client pool.
 
 These tests mock the Claude SDK to test pool logic in isolation.
 
@@ -103,8 +103,8 @@ class TestClientPoolInit:
 class TestClientPoolInitialize:
     """Tests for pool initialization."""
 
-    async def test_initialize_creates_clients(self):
-        """Initialize creates correct number of clients."""
+    async def test_initialize_does_not_create_clients(self):
+        """Initialize marks the pool ready without creating clients."""
         pool = ClientPool(size=2, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
@@ -113,25 +113,25 @@ class TestClientPoolInitialize:
 
             await pool.initialize()
 
-            assert MockClient.call_count == 2
-            assert mock_instance.connect.call_count == 2
-            assert len(pool._available) == 2
+            MockClient.assert_not_called()
+            mock_instance.connect.assert_not_called()
+            assert len(pool._available) == 0
             assert pool._initialized is True
 
-            # Cleanup health check task
             await pool.shutdown()
 
-    async def test_initialize_sets_model(self):
-        """Initialize sets model for all clients."""
+    async def test_first_acquire_sets_model(self):
+        """First acquire creates a client with the requested model."""
         pool = ClientPool(size=2, default_model="sonnet")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
-            mock_instance = AsyncMock()
-            MockClient.return_value = mock_instance
+            mock_client = _make_mock_client()
+            MockClient.return_value = mock_client
 
             await pool.initialize()
 
-            for client in pool._client_models:
+            async with pool.acquire("sonnet") as client:
+                assert client is mock_client
                 assert pool._client_models[client] == "sonnet"
 
             await pool.shutdown()
@@ -147,8 +147,7 @@ class TestClientPoolInitialize:
             await pool.initialize()
             await pool.initialize()  # Second call
 
-            # Should only create clients once
-            assert MockClient.call_count == 2
+            MockClient.assert_not_called()
 
             await pool.shutdown()
 
@@ -159,96 +158,108 @@ class TestClientPoolAcquire:
     """Tests for pool acquire functionality."""
 
     async def test_acquire_matching_model(self):
-        """Acquire returns a pre-warmed client for matching model."""
+        """Acquire returns an idle client for matching model."""
         pool = ClientPool(size=1, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
-            # init client, then prewarm client
-            mock_prewarm = _make_mock_client()
-            MockClient.side_effect = [mock_client, mock_prewarm]
+            MockClient.return_value = mock_client
 
             await pool.initialize()
 
             async with pool.acquire("opus") as client:
                 assert client is mock_client
 
-            # Allow background tasks to complete
-            await asyncio.sleep(0.01)
+            async with pool.acquire("opus") as client:
+                assert client is mock_client
+
+            assert MockClient.call_count == 1
 
             await pool.shutdown()
 
-    async def test_acquire_different_model_discards_prewarmed(self):
-        """Acquire with different model discards pre-warmed client."""
+    async def test_acquire_different_model_discards_idle(self):
+        """Acquire with different model discards an idle client when full."""
         pool = ClientPool(size=1, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_opus = _make_mock_client()
             mock_sonnet = _make_mock_client()
-            mock_prewarm = _make_mock_client()
-            MockClient.side_effect = [mock_opus, mock_sonnet, mock_prewarm]
+            MockClient.side_effect = [mock_opus, mock_sonnet]
 
             await pool.initialize()
+
+            async with pool.acquire("opus") as client:
+                assert client is mock_opus
 
             async with pool.acquire("sonnet") as client:
                 assert client is mock_sonnet
 
-            # Allow background tasks (disconnect old, prewarm new)
-            await asyncio.sleep(0.01)
             mock_opus.disconnect.assert_called_once()
 
             await pool.shutdown()
 
-    async def test_acquire_destroys_after_use(self):
-        """Client is destroyed (not returned) after use."""
+    async def test_acquire_returns_after_success(self):
+        """Client is returned to the idle pool after successful use."""
         pool = ClientPool(size=1, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
-            mock_prewarm = _make_mock_client()
-            MockClient.side_effect = [mock_client, mock_prewarm]
+            MockClient.return_value = mock_client
 
             await pool.initialize()
 
             async with pool.acquire("opus") as client:
                 assert client is mock_client
 
-            # Allow background tasks to complete
-            await asyncio.sleep(0.01)
+            assert pool._available == [mock_client]
+            mock_client.disconnect.assert_not_called()
 
-            # Client should have been disconnected, NOT returned to pool
+            await pool.shutdown()
+
+    async def test_acquire_destroys_after_error(self):
+        """Client is destroyed after an unsuccessful use."""
+        pool = ClientPool(size=1, default_model="opus")
+
+        with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
+            mock_client = _make_mock_client()
+            MockClient.return_value = mock_client
+
+            await pool.initialize()
+
+            with pytest.raises(RuntimeError, match="boom"):
+                async with pool.acquire("opus"):
+                    raise RuntimeError("boom")
+
+            assert len(pool._available) == 0
             mock_client.disconnect.assert_called_once()
 
             await pool.shutdown()
 
-    async def test_acquire_triggers_prewarm(self):
-        """Acquire triggers background pre-warm after use."""
+    async def test_successful_acquire_does_not_create_replacement(self):
+        """Acquire reuses the same client instead of creating replacements."""
         pool = ClientPool(size=2, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
-            mock_clients = [_make_mock_client() for _ in range(4)]
-            MockClient.side_effect = mock_clients
+            mock_client = _make_mock_client()
+            MockClient.return_value = mock_client
 
             await pool.initialize()
 
             async with pool.acquire("opus"):
                 pass
 
-            # Allow background tasks to complete
-            await asyncio.sleep(0.01)
-
-            # A pre-warm client should have been created (3rd client after the 2 init ones)
-            assert MockClient.call_count >= 3
+            assert MockClient.call_count == 1
+            assert pool._available == [mock_client]
 
             await pool.shutdown()
 
-    async def test_sequential_requests_get_different_clients(self):
-        """Sequential requests get different client instances (no reuse)."""
+    async def test_sequential_requests_reuse_client(self):
+        """Sequential requests for the same model reuse the same client."""
         pool = ClientPool(size=1, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
-            clients = [_make_mock_client() for _ in range(4)]
-            MockClient.side_effect = clients
+            client = _make_mock_client()
+            MockClient.return_value = client
 
             await pool.initialize()
 
@@ -257,16 +268,11 @@ class TestClientPoolAcquire:
             async with pool.acquire("opus") as c1:
                 acquired_clients.append(c1)
 
-            # Allow prewarm to complete
-            await asyncio.sleep(0.01)
-
             async with pool.acquire("opus") as c2:
                 acquired_clients.append(c2)
 
-            # The two clients must be different objects
-            assert acquired_clients[0] is not acquired_clients[1]
-            # First client must have been disconnected
-            acquired_clients[0].disconnect.assert_called_once()
+            assert acquired_clients[0] is acquired_clients[1]
+            acquired_clients[0].disconnect.assert_not_called()
 
             await pool.shutdown()
 
@@ -329,11 +335,11 @@ class TestClientPoolAcquire:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-class TestClientPoolPrewarm:
-    """Tests for pre-warming logic."""
+class TestClientPoolReuse:
+    """Tests for idle-client reuse logic."""
 
-    async def test_prewarm_fills_pool(self):
-        """Pre-warm adds client to available list."""
+    async def test_successful_request_returns_idle_client(self):
+        """A successful request adds the client to the available list."""
         pool = ClientPool(size=2, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
@@ -341,35 +347,29 @@ class TestClientPoolPrewarm:
 
             await pool.initialize()
 
-            # Pool has 2 available. Use one (leaves 1), which triggers prewarm.
             async with pool.acquire("opus"):
                 pass
 
-            # Allow prewarm to complete
-            await asyncio.sleep(0.01)
-
-            # Pool should be restored (prewarm added a client)
-            # Note: the used client is destroyed, so available count
-            # depends on prewarm filling the slot
-            assert len(pool._available) >= 1
+            assert len(pool._available) == 1
 
             await pool.shutdown()
 
-    async def test_prewarm_respects_pool_size(self):
-        """Pre-warm doesn't grow pool beyond size."""
+    async def test_reuse_respects_pool_size(self):
+        """Returned idle clients do not grow the pool beyond size."""
         pool = ClientPool(size=1, default_model="opus")
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             MockClient.return_value = _make_mock_client()
 
-            # Manually add a client
-            client = await pool._create_client("opus")
-            pool._available.append(client)
+            await pool.initialize()
 
-            # Now prewarm — should not add because pool is full
-            await pool._prewarm_client("opus")
+            async with pool.acquire("opus"):
+                pass
+            async with pool.acquire("opus"):
+                pass
 
             assert len(pool._available) == 1
+            assert MockClient.call_count == 1
 
             await pool.shutdown()
 
@@ -388,6 +388,9 @@ class TestClientPoolShutdown:
             MockClient.side_effect = mock_clients
 
             await pool.initialize()
+            async with pool.acquire("opus"):
+                async with pool.acquire("sonnet"):
+                    pass
             await pool.shutdown()
 
             for mock_client in mock_clients:
@@ -403,15 +406,13 @@ class TestClientPoolShutdown:
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
-            mock_prewarm = _make_mock_client()
-            MockClient.side_effect = [mock_client, mock_prewarm]
+            MockClient.return_value = mock_client
 
             await pool.initialize()
 
             async with pool.acquire("opus"):
                 pass
 
-            await asyncio.sleep(0.01)
             await pool.shutdown()
 
             assert pool._in_use == 0
@@ -447,8 +448,11 @@ class TestClientPoolModelTracking:
 
             await pool.initialize()
 
-            for client in pool._available:
+            async with pool.acquire("opus") as client:
                 assert pool._client_models[client] == "opus"
+
+            async with pool.acquire("sonnet") as client:
+                assert pool._client_models[client] == "sonnet"
 
             await pool.shutdown()
 
@@ -470,9 +474,9 @@ class TestClientPoolStatus:
 
             status = pool.status()
             assert status["size"] == 2
-            assert status["available"] == 2
+            assert status["available"] == 0
             assert status["in_use"] == 0
-            assert len(status["models"]) == 2
+            assert len(status["models"]) == 0
 
             await pool.shutdown()
 
@@ -489,7 +493,7 @@ class TestClientPoolStatus:
             async with pool.acquire("opus"):
                 status = pool.status()
                 assert status["in_use"] == 1
-                assert status["available"] == 1
+                assert status["available"] == 0
 
             await pool.shutdown()
 
@@ -513,7 +517,7 @@ class TestClientPoolSnapshot:
                 snap = pool.snapshot()
                 assert snap["size"] == 2
                 assert snap["in_use"] == 1
-                assert snap["available"] == 1
+                assert snap["available"] == 0
                 assert isinstance(snap["available_models"], list)
                 assert isinstance(snap["all_models"], list)
                 assert len(snap["all_models"]) >= 1
@@ -562,7 +566,7 @@ class TestHealthCheck:
     """Tests for _check_idle_clients health check logic."""
 
     async def test_health_check_replaces_dead_client(self):
-        """Dead subprocess (returncode != None) is detected and replaced."""
+        """Dead subprocess (returncode != None) is detected and removed."""
         pool = ClientPool(size=1, default_model="opus")
 
         # Use spec to restrict attributes — prevents hasattr() from auto-returning True
@@ -571,20 +575,14 @@ class TestHealthCheck:
         dead_client._transport._process = AsyncMock()
         dead_client._transport._process.returncode = 1  # process has exited
 
-        new_client = AsyncMock(spec=["connect", "disconnect", "_transport"])
-        new_client._transport = AsyncMock()
-        new_client._transport._process = AsyncMock()
-        new_client._transport._process.returncode = None  # alive
-
         pool._available = [dead_client]
         pool._client_models[dead_client] = "opus"
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
-            MockClient.return_value = new_client
-
             await pool._check_idle_clients()
+            MockClient.assert_not_called()
 
-        # Dead client must be replaced
+        # Dead client must be removed and not eagerly replaced.
         dead_client.disconnect.assert_called_once()
         assert dead_client not in pool._available
 
@@ -632,17 +630,13 @@ class TestClientPoolRequestIdLogging:
 
         with patch("claude_agent_sdk.ClaudeSDKClient") as MockClient:
             mock_client = _make_mock_client()
-            mock_prewarm = _make_mock_client()
-            MockClient.side_effect = [mock_client, mock_prewarm]
+            MockClient.return_value = mock_client
 
             await pool.initialize()
 
             with caplog.at_level("INFO", logger="agentbridge.pool"):
                 async with pool.acquire("opus", request_id="chatcmpl-test123"):
                     pass
-
-            # Allow background tasks to complete
-            await asyncio.sleep(0.01)
 
             # Check that request ID appears in log messages
             request_id_logs = [r for r in caplog.records if "chatcmpl-test123" in r.message]

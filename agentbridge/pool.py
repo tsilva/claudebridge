@@ -1,4 +1,4 @@
-"""Single-use client pool with pre-warming for zero cross-contamination."""
+"""Lazy reusable Claude SDK client pool."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 # Claude palette (24-bit true color)
 _CLAUDE = "\033[38;2;218;119;86m"  # Terracotta — Claude's signature orange
-_DIM = "\033[2m"
 _GREEN = "\033[32m"
 _RESET = "\033[0m"
 
@@ -42,10 +41,11 @@ def make_options(model: str, max_tokens: int | None = None):
 
 
 class ClientPool:
-    """Single-use client pool with background pre-warming.
+    """Lazy reusable client pool with a hard concurrency limit.
 
-    Each request gets a fresh (or pre-warmed) client. Clients are NEVER reused —
-    they are destroyed after each request. Background pre-warming hides creation latency.
+    Clients are created on demand for the requested model and returned to the
+    idle pool after successful use. The pool never creates model-specific
+    clients at process startup.
     """
 
     def __init__(
@@ -57,25 +57,21 @@ class ClientPool:
         """Initialize client pool.
 
         Args:
-            size: Maximum concurrent clients / pre-warm slots.
-            default_model: Model to use for initial pool population.
+            size: Maximum concurrent clients / idle slots.
+            default_model: Fallback model for diagnostics.
             on_change: Optional callback invoked on every state mutation.
         """
         self.size = size
         self.default_model = default_model
         self._on_change = on_change
         self._client_models: dict[ClaudeSDKClient, str] = {}  # client -> model
-        self._available: list[ClaudeSDKClient] = []  # pre-warmed clients
+        self._available: list[ClaudeSDKClient] = []  # idle reusable clients
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(size)  # limits concurrent usage
-        self._prewarm_semaphore = asyncio.Semaphore(max(1, size // 2))
-        self._prewarm_cooldown_until: float = 0  # monotonic timestamp until pre-warms are skipped
-        self._prewarm_consecutive_failures: int = 0  # tracks consecutive pre-warm failures
         self._initialized = False
         self._in_use = 0
         self._acquire_timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
         self._health_check_task: asyncio.Task | None = None
-        self._background_tasks: set[asyncio.Task] = set()
 
     def _fire_change(self) -> None:
         """Invoke on_change callback if set."""
@@ -83,26 +79,13 @@ class ClientPool:
             self._on_change()
 
     async def initialize(self) -> None:
-        """Pre-spawn all clients with default model."""
+        """Mark the pool ready without creating any model-specific clients."""
         if self._initialized:
             return
 
-        label = "client" if self.size == 1 else "clients"
-        logger.info(
-            f"{_CLAUDE}[pool]{_RESET} Warming {self.size} {self.default_model} {label}..."
-        )
-        for i in range(self.size):
-            client = await self._create_client(self.default_model)
-            self._available.append(client)
-            if self.size > 1:
-                logger.info(
-                    f"{_CLAUDE}[pool]{_RESET} Client {i + 1}/{self.size} "
-                    f"connected {_DIM}({self.default_model}){_RESET}"
-                )
-
         self._initialized = True
         logger.info(
-            f"{_CLAUDE}[pool]{_RESET} {_GREEN}Ready{_RESET} | available={len(self._available)}"
+            f"{_CLAUDE}[pool]{_RESET} {_GREEN}Ready{_RESET} | max={self.size} available=0"
         )
         self._fire_change()
 
@@ -132,12 +115,6 @@ class ClientPool:
         except BaseException:
             pass
         self._client_models.pop(client, None)
-
-    def _spawn_background(self, coro) -> None:
-        """Create a tracked background task that cleans up after itself."""
-        task = asyncio.create_task(coro)
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
 
     def _log_tag(self, request_id: str | None = None) -> str:
         """Return log prefix with optional request ID."""
@@ -183,10 +160,11 @@ class ClientPool:
     async def acquire(
         self, model: str, request_id: str | None = None
     ) -> AsyncIterator[ClaudeSDKClient]:
-        """Get a fresh client for the specified model.
+        """Get a client for the specified model.
 
-        Takes a pre-warmed client with matching model if available,
-        otherwise creates a new one. Client is ALWAYS destroyed after use.
+        Takes an idle client with matching model if available, otherwise creates
+        a new one. If the pool is full of idle clients for other models, the
+        oldest idle client is discarded to make room for the requested model.
 
         Args:
             model: Model name (opus, sonnet, haiku).
@@ -223,27 +201,27 @@ class ClientPool:
             completed = False
 
             async with self._lock:
-                # Take a pre-warmed client with matching model if available
+                # Take an idle client with matching model if available.
                 matching = [
                     c for c in self._available if self._client_models[c] == model
                 ]
                 if matching:
                     client = matching[0]
                     self._available.remove(client)
-                    logger.info(f"{tag} Using pre-warmed {model} client")
-                elif self._available:
-                    # Save reference for inline disconnect after releasing the lock
+                    logger.info(f"{tag} Reusing idle {model} client")
+                elif len(self._client_models) >= self.size and self._available:
+                    # Pool is full, but only with idle clients for other models.
                     old_to_discard = self._available.pop(0)
 
                 self._in_use += 1
                 self._log_status("Acquired", request_id)
                 self._fire_change()
 
-            # Disconnect non-matching pre-warmed client outside the lock
+            # Disconnect non-matching idle client outside the lock.
             if old_to_discard:
                 old_model = self._client_models.get(old_to_discard, "unknown")
                 logger.info(
-                    f"{tag} Discarding pre-warmed {old_model} client, need {model}"
+                    f"{tag} Discarding idle {old_model} client, need {model}"
                 )
                 try:
                     await self._disconnect_client(old_to_discard)
@@ -253,7 +231,7 @@ class ClientPool:
                     )
                     raise
 
-            # Create fresh if no pre-warmed client was available
+            # Create fresh if no reusable client was available.
             if client is None:
                 try:
                     client = await self._create_client(model)
@@ -267,60 +245,29 @@ class ClientPool:
         except Exception:
             raise
         finally:
+            disconnect_client: ClaudeSDKClient | None = None
+            returned = False
             async with self._lock:
                 self._in_use -= 1
+                if (
+                    client is not None
+                    and completed
+                    and self._initialized
+                    and len(self._available) + self._in_use < self.size
+                ):
+                    self._available.append(client)
+                    returned = True
+                else:
+                    disconnect_client = client
                 self._fire_change()
-            # ALWAYS destroy after use — never return to pool
-            if client is not None:
-                status = "after use" if completed else "after cancellation"
+            if returned:
+                logger.info(f"{tag} Returned {model} client to idle pool")
+            elif disconnect_client is not None:
+                status = "after cancellation" if not completed else "during shutdown"
                 logger.info(f"{tag} Destroyed {model} client {status}")
-                await self._disconnect_client(client)
-            # Pre-warm a replacement (only if still running, not during shutdown)
-            if self._initialized:
-                self._spawn_background(self._prewarm_client(model))
+                await self._disconnect_client(disconnect_client)
             self._semaphore.release()
             self._log_status("Released", request_id)
-
-    async def _prewarm_client(self, model: str) -> None:
-        """Create a fresh client and add to available pool for next request."""
-        # Circuit breaker: skip if in cooldown from recent failures
-        if time.monotonic() < self._prewarm_cooldown_until:
-            return
-
-        # Fast path: skip if pool is already full
-        async with self._lock:
-            if len(self._available) + self._in_use >= self.size:
-                return
-
-        # Limit concurrent pre-warm subprocess spawns
-        async with self._prewarm_semaphore:
-            try:
-                # Re-check capacity after acquiring semaphore (eliminates TOCTOU)
-                async with self._lock:
-                    if len(self._available) + self._in_use >= self.size:
-                        return
-
-                client = await self._create_client(model)
-                discard = False
-                async with self._lock:
-                    if len(self._available) + self._in_use < self.size:
-                        self._available.append(client)
-                        logger.info(f"[pool] Pre-warmed {model} client")
-                        self._fire_change()
-                    else:
-                        discard = True
-                        self._fire_change()
-                if discard:
-                    await self._disconnect_client(client)
-
-                # Success: reset circuit breaker
-                self._prewarm_consecutive_failures = 0
-                self._prewarm_cooldown_until = 0
-            except Exception as e:
-                self._prewarm_consecutive_failures += 1
-                delay = min(2 ** self._prewarm_consecutive_failures, 30)
-                self._prewarm_cooldown_until = time.monotonic() + delay
-                logger.warning(f"[pool] Pre-warm failed (backoff {delay}s): {e}")
 
     async def _periodic_health_check(self) -> None:
         """Background task that checks idle client health every HEALTH_CHECK_INTERVAL seconds."""
@@ -332,7 +279,7 @@ class ClientPool:
                 logger.warning(f"[pool] Health check error: {e}")
 
     async def _check_idle_clients(self) -> None:
-        """Check each idle client's process is alive, replace if not."""
+        """Check each idle client's process is alive, removing dead clients."""
         async with self._lock:
             clients_to_check = list(self._available)
 
@@ -346,9 +293,7 @@ class ClientPool:
                         raise RuntimeError("Process exited")
             except Exception:
                 model = self._client_models.get(client, self.default_model)
-                logger.warning(
-                    f"[pool] Health check: {model} client unresponsive, replacing"
-                )
+                logger.warning(f"[pool] Health check: {model} client unresponsive")
                 removed = False
                 async with self._lock:
                     if client in self._available:
@@ -357,27 +302,12 @@ class ClientPool:
                 if removed:
                     await self._disconnect_client(client)
                     self._fire_change()
-                    try:
-                        new_client = await self._create_client(model)
-                        async with self._lock:
-                            if len(self._available) + self._in_use < self.size:
-                                self._available.append(new_client)
-                                self._fire_change()
-                                logger.info(
-                                    f"[pool] Health check: replaced unresponsive {model} client"
-                                )
-                            else:
-                                await self._disconnect_client(new_client)
-                    except Exception as e:
-                        logger.error(
-                            f"[pool] Health check: failed to replace client: {e}"
-                        )
 
     async def shutdown(self) -> None:
         """Disconnect all clients and clean up."""
         logger.info(f"[pool] Shutting down {len(self._client_models)} clients...")
 
-        # Prevent new prewarms from spawning (BUG 14 fix cooperates with this)
+        # Prevent in-flight requests from returning clients to the idle pool.
         self._initialized = False
 
         # Cancel health check task
@@ -401,12 +331,6 @@ class ClientPool:
                 )
                 break
             await asyncio.sleep(0.1)
-
-        # Wait for in-flight background tasks (disconnects, pre-warms)
-        if self._background_tasks:
-            snapshot = set(self._background_tasks)
-            await asyncio.gather(*snapshot, return_exceptions=True)
-            self._background_tasks -= snapshot
 
         for client in list(self._client_models.keys()):
             await self._disconnect_client(client)
