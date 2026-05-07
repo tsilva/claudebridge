@@ -95,21 +95,30 @@
         }
 
         .nav-item {
+            appearance: none;
             min-width: 112px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             padding: 0 18px;
             color: var(--muted);
+            background: transparent;
             text-decoration: none;
+            border: 0;
             border-bottom: 3px solid transparent;
             font-weight: 550;
+            cursor: pointer;
         }
 
         .nav-item.active {
             color: var(--accent-strong);
             border-bottom-color: var(--accent);
             background: #fbfefe;
+        }
+
+        .nav-item:focus-visible {
+            outline: 2px solid rgba(22, 133, 117, 0.35);
+            outline-offset: -2px;
         }
 
         .nav-item:hover {
@@ -871,7 +880,7 @@
             </h1>
             <nav class="main-nav" aria-label="Dashboard views">
                 <a class="nav-item active" href="/dashboard">Monitor</a>
-                <a class="nav-item" href="/dashboard/chat">Chat Tester</a>
+                <a class="nav-item" href="/dashboard/chat">Chat</a>
             </nav>
             <div class="header-actions">
                 <div hx-ext="sse" sse-connect="/dashboard/pool/stream" sse-swap="message" hx-swap="innerHTML"></div>
@@ -919,7 +928,9 @@
     </div>
     <script>
         (function() {
-            var selectedId = null;
+            var initialSelectedId = new URLSearchParams(window.location.search).get('request_id');
+            var selectedId = /^chatcmpl-[a-f0-9]{8,32}$/.test(initialSelectedId || '') ? initialSelectedId : null;
+            var detailLoadedId = null;
             var listEl = document.getElementById('request-list');
             var filterEl = document.getElementById('request-filter');
 
@@ -938,18 +949,60 @@
                 }
             });
 
-            function markSelected(row) {
-                if (!row) return;
-                selectedId = row.getAttribute('data-request-id');
+            function findRequestRow(requestId) {
+                var rows = listEl.querySelectorAll('.request-row');
+                for (var i = 0; i < rows.length; i += 1) {
+                    if (rows[i].getAttribute('data-request-id') === requestId) return rows[i];
+                }
+                return null;
+            }
+
+            function markSelected(row, options) {
+                options = options || {};
+                if (row) selectedId = row.getAttribute('data-request-id');
+                if (!selectedId) return;
                 listEl.querySelectorAll('.request-row').forEach(function(r) {
                     r.classList.toggle('active', r.getAttribute('data-request-id') === selectedId);
                 });
+                if (row && options.scroll !== false) {
+                    row.scrollIntoView({ block: 'nearest' });
+                }
+            }
+
+            function loadSelectedDetail(options) {
+                options = options || {};
+                if (!selectedId || !window.htmx) return;
+                var row = findRequestRow(selectedId);
+                markSelected(row, { scroll: options.scroll });
+                if (detailLoadedId !== selectedId) {
+                    window.htmx.ajax('GET', '/dashboard/request/' + selectedId, '#detail');
+                    detailLoadedId = selectedId;
+                }
+            }
+
+            function updateSelectedUrl() {
+                if (!selectedId || !window.history || !window.history.pushState) return;
+                var nextUrl = '/dashboard?request_id=' + encodeURIComponent(selectedId);
+                if (window.location.pathname + window.location.search !== nextUrl) {
+                    window.history.pushState({ requestId: selectedId }, '', nextUrl);
+                }
             }
 
             listEl.addEventListener('click', function(e) {
                 var row = e.target.closest('.request-row');
                 if (!row) return;
                 markSelected(row);
+                detailLoadedId = selectedId;
+                updateSelectedUrl();
+            });
+
+            window.addEventListener('popstate', function() {
+                var nextId = new URLSearchParams(window.location.search).get('request_id');
+                selectedId = /^chatcmpl-[a-f0-9]{8,32}$/.test(nextId || '') ? nextId : null;
+                detailLoadedId = null;
+                if (selectedId) {
+                    loadSelectedDetail({ scroll: true });
+                }
             });
 
             document.body.addEventListener('click', function(e) {
@@ -961,17 +1014,14 @@
             document.body.addEventListener('htmx:sseMessage', function(e) {
                 if (!listEl.contains(e.target)) return;
                 requestAnimationFrame(function() {
-                    if (selectedId) {
-                        listEl.querySelectorAll('.request-row').forEach(function(r) {
-                            r.classList.toggle('active', r.getAttribute('data-request-id') === selectedId);
-                        });
-                    }
                     applyFilter();
                 });
             });
 
             document.body.addEventListener('htmx:afterSettle', function(e) {
-                if (e.detail.target && e.detail.target.id === 'request-list' && !selectedId) {
+                if (e.detail.target && e.detail.target.id === 'request-list' && selectedId) {
+                    loadSelectedDetail({ scroll: true });
+                } else if (e.detail.target && e.detail.target.id === 'request-list' && !selectedId) {
                     var firstRow = listEl.querySelector('.request-row');
                     if (firstRow) {
                         setTimeout(function() {
@@ -984,19 +1034,9 @@
                 }
             });
 
-            var observer = new MutationObserver(function() {
-                if (selectedId) return;
-                var firstRow = listEl.querySelector('.request-row');
-                if (!firstRow) return;
-                setTimeout(function() {
-                    if (selectedId) return;
-                    markSelected(firstRow);
-                    if (window.htmx) {
-                        window.htmx.ajax('GET', '/dashboard/request/' + selectedId, '#detail');
-                    }
-                }, 30);
-            });
-            observer.observe(listEl, { childList: true, subtree: true });
+            if (selectedId) {
+                loadSelectedDetail({ scroll: true });
+            }
         })();
     </script>
     <script>

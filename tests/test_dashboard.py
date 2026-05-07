@@ -371,22 +371,26 @@ class TestDashboardPage:
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
         assert "agentbridge" in resp.text
+        assert "request_id" in resp.text
+        assert "loadSelectedDetail" in resp.text
+        assert "/dashboard/request/" in resp.text
+        assert "MutationObserver" not in resp.text
 
-    def test_dashboard_links_to_chat_tester(self):
-        """Dashboard page links to the chat tester."""
+    def test_dashboard_links_to_chat(self):
+        """Dashboard page links to Chat."""
         app = _make_app()
         client = TestClient(app)
         resp = client.get("/dashboard")
         assert resp.status_code == 200
-        assert "/dashboard/chat" in resp.text
+        assert 'class="nav-item" href="/dashboard/chat">Chat</a>' in resp.text
 
 
 @pytest.mark.unit
 class TestDashboardChatPage:
     """Tests for GET /dashboard/chat."""
 
-    def test_returns_chat_tester_html(self):
-        """Chat tester page includes attachment and error-detail UI."""
+    def test_returns_chat_html(self):
+        """Chat page includes attachment and error-detail UI."""
         app = _make_app()
         client = TestClient(app)
         resp = client.get("/dashboard/chat")
@@ -400,11 +404,22 @@ class TestDashboardChatPage:
         assert "markdownToHtml" in resp.text
         assert "appendAssistantDelta" in resp.text
         assert 'rows="1"' in resp.text
+        assert 'accept="image/*,application/pdf,text/plain,.txt"' in resp.text
+        assert "is not an image, PDF, or TXT file" in resp.text
         assert "autosizePrompt" in resp.text
         assert "supportsStreaming" in resp.text
+        assert "Base URL" not in resp.text
+        assert '<input id="base-url" type="hidden" value="/api/v1">' in resp.text
+        assert "message-info" in resp.text
+        assert "setMessageRequestId" in resp.text
+        assert "sessionStorage.setItem(chatStateKey" in resp.text
+        assert "restoreChatState" in resp.text
+        assert "var renderedMessages = []" in resp.text
+        assert 'modelEl.addEventListener("change", saveChatState)' in resp.text
+        assert '"/dashboard?request_id=" + encodeURIComponent(requestId)' in resp.text
         assert 'class="main-nav"' in resp.text
         assert 'class="nav-item" href="/dashboard">Monitor</a>' in resp.text
-        assert 'class="nav-item active" href="/dashboard/chat">Chat Tester</a>' in resp.text
+        assert 'class="nav-item active" href="/dashboard/chat">Chat</a>' in resp.text
         assert 'if (e.key !== "Enter" || e.isComposing) return;' in resp.text
         assert "if (e.altKey) return;" in resp.text
         assert "e.preventDefault();" in resp.text

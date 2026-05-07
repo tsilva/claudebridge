@@ -27,8 +27,10 @@ from agentbridge.models import (
 from agentbridge.server import (
     ClaudeResponse,
     _build_codex_command,
+    _openrouter_client_kwargs,
     _message_from_openrouter,
     _openrouter_payload,
+    _openrouter_to_dict,
     _parse_codex_json_lines,
     _resolve_codex_reasoning_effort,
     _usage_from_openrouter,
@@ -433,6 +435,22 @@ class TestCodexHelpers:
 class TestOpenRouterHelpers:
     """Tests for OpenRouter adapter helper functions."""
 
+    def test_openrouter_client_kwargs_include_sdk_metadata(self, monkeypatch, tmp_path):
+        """OpenRouter SDK client receives key and optional site metadata."""
+        monkeypatch.setenv("AGENTBRIDGE_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+        monkeypatch.setenv("OPENROUTER_SITE_URL", "https://agentbridge.test")
+        monkeypatch.setenv("OPENROUTER_APP_NAME", "AgentBridge Test")
+
+        kwargs = _openrouter_client_kwargs()
+
+        assert kwargs == {
+            "api_key": "sk-or-test",
+            "timeout_ms": 120000,
+            "http_referer": "https://agentbridge.test",
+            "x_open_router_title": "AgentBridge Test",
+        }
+
     def test_openrouter_payload_uses_backend_model(self):
         """OpenRouter payload strips the AgentBridge namespace."""
         request = ChatCompletionRequest(
@@ -450,6 +468,34 @@ class TestOpenRouterHelpers:
         assert payload["model"] == "anthropic/claude-sonnet-4"
         assert payload["stream"] is False
         assert payload["temperature"] == 0.2
+
+    def test_openrouter_payload_normalizes_openai_only_fields(self):
+        """OpenAI compatibility fields unsupported by the SDK are normalized."""
+        request = ChatCompletionRequest(
+            model="openrouter/openai/gpt-5",
+            messages=[Message(role="user", content="Hello")],
+            n=1,
+            reasoning_effort="high",
+        )
+
+        payload = _openrouter_payload(request, "openai/gpt-5", stream=False)
+
+        assert "n" not in payload
+        assert "reasoning_effort" not in payload
+        assert payload["reasoning"] == {"effort": "high"}
+
+    def test_openrouter_sdk_object_normalizes_to_dict(self):
+        """OpenRouter SDK Pydantic-like objects normalize before parsing."""
+
+        class SDKResponse:
+            def model_dump(self, **kwargs):
+                assert kwargs["mode"] == "json"
+                assert kwargs["exclude_none"] is True
+                return {"choices": [{"message": {"content": "Hello"}}]}
+
+        assert _openrouter_to_dict(SDKResponse()) == {
+            "choices": [{"message": {"content": "Hello"}}],
+        }
 
     def test_openrouter_message_and_usage_parse(self):
         """OpenRouter response JSON maps into local message and usage models."""

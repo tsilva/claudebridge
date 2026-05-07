@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 import re
 import time
 from collections import deque
@@ -13,6 +12,10 @@ from typing import Callable
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+
+from .config import load_user_env, session_log_dir
+
+load_user_env()
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +230,7 @@ def _parse_log_file(path: Path) -> dict | None:
 
 def _get_recent_logs(limit: int = 20) -> list[dict]:
     """Read recent session log files, newest first."""
-    log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+    log_dir = session_log_dir()
     if not log_dir.exists():
         return []
 
@@ -427,7 +430,7 @@ def create_dashboard_router(
             )
 
         # Fall back to log file
-        log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+        log_dir = session_log_dir()
         log_path = log_dir / f"{request_id}.json"
         parsed = _parse_log_file(log_path)
         if parsed is None:
@@ -463,7 +466,7 @@ def create_dashboard_router(
         if not re.fullmatch(r"chatcmpl-[a-f0-9]{8,32}", request_id):
             raise HTTPException(status_code=400, detail="Invalid request ID")
 
-        log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+        log_dir = session_log_dir()
         log_path = log_dir / f"{request_id}.json"
         if not log_path.is_file():
             raise HTTPException(status_code=404, detail="Request log not found")
@@ -482,7 +485,7 @@ def create_dashboard_router(
         if ".." in filename or "/" in filename or "\\" in filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
 
-        log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
+        log_dir = session_log_dir()
         file_path = log_dir / f"{request_id}_attachments" / filename
         # Resolved-path containment check to prevent path traversal
         if not file_path.resolve().is_relative_to(log_dir.resolve()):

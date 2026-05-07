@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>agentbridge chat tester</title>
+    <title>agentbridge chat</title>
     <style>
         :root {
             --bg: #f7f8f8;
@@ -97,21 +97,30 @@
         }
 
         .nav-item {
+            appearance: none;
             min-width: 112px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             padding: 0 18px;
             color: var(--muted);
+            background: transparent;
             text-decoration: none;
+            border: 0;
             border-bottom: 3px solid transparent;
             font-weight: 550;
+            cursor: pointer;
         }
 
         .nav-item.active {
             color: var(--accent-strong);
             border-bottom-color: var(--accent);
             background: #fbfefe;
+        }
+
+        .nav-item:focus-visible {
+            outline: 2px solid rgba(22, 133, 117, 0.35);
+            outline-offset: -2px;
         }
 
         .nav-item:hover {
@@ -153,17 +162,6 @@
             outline: 0;
             color: var(--text);
             background: transparent;
-        }
-
-        .field-url {
-            flex: 1 1 240px;
-            max-width: 460px;
-        }
-
-        .field-url input {
-            width: 100%;
-            font-family: var(--mono);
-            font-size: 12px;
         }
 
         .field-model {
@@ -276,7 +274,6 @@
         .message-header {
             display: flex;
             align-items: center;
-            justify-content: space-between;
             gap: 12px;
             margin-bottom: 7px;
             color: var(--muted);
@@ -285,6 +282,36 @@
 
         .message-role {
             font-weight: 650;
+        }
+
+        .message-actions {
+            margin-left: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .message-info {
+            width: 24px;
+            height: 24px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+            background: var(--surface);
+            text-decoration: none;
+        }
+
+        .message-info:hover {
+            color: var(--accent-strong);
+            border-color: rgba(22, 133, 117, 0.3);
+            background: rgba(22, 133, 117, 0.06);
+        }
+
+        .message-info.available {
+            display: inline-flex;
         }
 
         .model-badge {
@@ -541,7 +568,7 @@
             grid-template-columns: auto 1fr auto;
             align-items: center;
             gap: 10px;
-            padding: 10px;
+            padding: 6px 10px 10px;
         }
 
         textarea {
@@ -636,7 +663,11 @@
 
         @media (max-width: 1180px) {
             body { overflow: auto; }
-            .app { min-height: 100vh; height: auto; }
+            .app {
+                min-height: 100vh;
+                height: auto;
+                grid-template-rows: auto 1fr;
+            }
             .topbar {
                 grid-template-columns: 1fr;
                 grid-template-rows: auto auto auto;
@@ -653,7 +684,6 @@
                 justify-content: space-between;
                 align-items: stretch;
             }
-            .field-url,
             .field-model {
                 min-width: 260px;
                 max-width: none;
@@ -672,7 +702,6 @@
             .status {
                 min-width: 0;
             }
-            .field-url,
             .field-model,
             .status {
                 width: 100%;
@@ -687,7 +716,7 @@
                 flex: 1;
             }
             .input-row {
-                grid-template-columns: auto 1fr;
+                grid-template-columns: auto minmax(0, 1fr) auto;
             }
             .secondary {
                 width: 100%;
@@ -710,13 +739,10 @@
             </a>
             <nav class="main-nav" aria-label="Dashboard views">
                 <a class="nav-item" href="/dashboard">Monitor</a>
-                <a class="nav-item active" href="/dashboard/chat">Chat Tester</a>
+                <a class="nav-item active" href="/dashboard/chat">Chat</a>
             </nav>
+            <input id="base-url" type="hidden" value="/api/v1">
             <div class="header-actions">
-                <label class="field field-url">
-                    <span>Base URL</span>
-                    <input id="base-url" value="/api/v1" spellcheck="false">
-                </label>
                 <label class="field field-model">
                     <span>Model</span>
                     <select id="model">
@@ -754,7 +780,7 @@
                         </svg>
                     </button>
                 </div>
-                <input id="file-input" class="hidden-input" type="file" multiple accept="image/*,application/pdf">
+                <input id="file-input" class="hidden-input" type="file" multiple accept="image/*,application/pdf,text/plain,.txt">
             </section>
         </main>
     </div>
@@ -773,8 +799,10 @@
             var sendEl = document.getElementById("send");
             var attachedFiles = [];
             var conversationMessages = [];
+            var renderedMessages = [];
             var modelStreamingSupport = {};
             var modelLoadTimer = null;
+            var chatStateKey = "agentbridge.chat.state.v1";
 
             function endpoint(path) {
                 return baseUrlEl.value.replace(/\/$/, "") + path;
@@ -957,6 +985,43 @@
                 if (article) article.remove();
             }
 
+            function messageFileNames(files) {
+                return (files || []).map(function(file) {
+                    return typeof file === "string" ? file : file.name;
+                }).filter(Boolean);
+            }
+
+            function saveChatState() {
+                try {
+                    sessionStorage.setItem(chatStateKey, JSON.stringify({
+                        model: modelEl.value,
+                        conversationMessages: conversationMessages,
+                        renderedMessages: renderedMessages
+                    }));
+                } catch (e) {
+                    try {
+                        sessionStorage.setItem(chatStateKey, JSON.stringify({
+                            model: modelEl.value,
+                            conversationMessages: [],
+                            renderedMessages: renderedMessages
+                        }));
+                    } catch (fallbackError) {
+                        // Attachments can exceed sessionStorage quota; keep the live chat usable.
+                    }
+                }
+            }
+
+            function updateRenderedMessage(target, values) {
+                var article = target && target.closest ? target.closest(".message") : null;
+                if (!article || article.dataset.chatIndex === undefined) return;
+                var index = Number(article.dataset.chatIndex);
+                if (!renderedMessages[index]) return;
+                Object.keys(values).forEach(function(key) {
+                    renderedMessages[index][key] = values[key];
+                });
+                saveChatState();
+            }
+
             function appendAssistantDelta(target, delta) {
                 renderAssistantMarkdown(target, (target.dataset.rawMarkdown || "") + delta);
                 messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -967,6 +1032,16 @@
                 clearEmptyState();
                 var article = document.createElement("article");
                 article.className = "message " + role;
+                if (options.persist !== false) {
+                    article.dataset.chatIndex = String(renderedMessages.length);
+                    renderedMessages.push({
+                        role: role,
+                        text: text || "",
+                        model: options.model || null,
+                        requestId: options.requestId || null,
+                        files: messageFileNames(files)
+                    });
+                }
                 var header = document.createElement("div");
                 header.className = "message-header";
 
@@ -975,13 +1050,28 @@
                 roleLabel.textContent = role === "user" ? "You" : "Assistant";
                 header.appendChild(roleLabel);
 
+                var actions = document.createElement("div");
+                actions.className = "message-actions";
+
                 if (role === "assistant" && options.model) {
                     var modelBadge = document.createElement("span");
                     modelBadge.className = "model-badge";
                     modelBadge.title = "Model used for this response";
                     modelBadge.textContent = options.model;
-                    header.appendChild(modelBadge);
+                    actions.appendChild(modelBadge);
                 }
+
+                if (role === "user" || role === "assistant") {
+                    var infoLink = document.createElement("a");
+                    infoLink.className = "message-info";
+                    infoLink.title = "View request in Monitor";
+                    infoLink.setAttribute("aria-label", "View request in Monitor");
+                    infoLink.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>';
+                    actions.appendChild(infoLink);
+                    article.dataset.requestLinkReady = "false";
+                }
+
+                header.appendChild(actions);
 
                 var body = document.createElement("div");
                 body.className = "message-body";
@@ -1006,7 +1096,65 @@
 
                 messagesEl.appendChild(article);
                 messagesEl.scrollTop = messagesEl.scrollHeight;
+                if (options.persist !== false) {
+                    saveChatState();
+                }
                 return body;
+            }
+
+            function setMessageRequestId(target, requestId) {
+                if (!target || !requestId) return;
+                var article = target.closest ? target.closest(".message") : null;
+                if (!article) return;
+                article.dataset.requestId = requestId;
+                article.dataset.requestLinkReady = "true";
+                var infoLink = article.querySelector(".message-info");
+                if (!infoLink) return;
+                infoLink.href = "/dashboard?request_id=" + encodeURIComponent(requestId);
+                infoLink.classList.add("available");
+                updateRenderedMessage(target, { requestId: requestId });
+            }
+
+            function restoreChatState() {
+                var raw = null;
+                try {
+                    raw = sessionStorage.getItem(chatStateKey);
+                } catch (e) {
+                    return;
+                }
+                if (!raw) return;
+                try {
+                    var state = JSON.parse(raw);
+                    if (!state || !Array.isArray(state.renderedMessages)) return;
+                    conversationMessages = Array.isArray(state.conversationMessages) ? state.conversationMessages : [];
+                    if (state.model) modelEl.value = state.model;
+                    state.renderedMessages.forEach(function(message) {
+                        var body = appendMessage(
+                            message.role,
+                            message.text || "",
+                            (message.files || []).map(function(name) { return { name: name }; }),
+                            {
+                                model: message.model || null,
+                                requestId: message.requestId || null,
+                                persist: false
+                            }
+                        );
+                        renderedMessages.push({
+                            role: message.role,
+                            text: message.text || "",
+                            model: message.model || null,
+                            requestId: message.requestId || null,
+                            files: message.files || []
+                        });
+                        body.closest(".message").dataset.chatIndex = String(renderedMessages.length - 1);
+                        setMessageRequestId(body, message.requestId);
+                    });
+                    saveChatState();
+                } catch (e) {
+                    try {
+                        sessionStorage.removeItem(chatStateKey);
+                    } catch (removeError) {}
+                }
             }
 
             function compactJson(value) {
@@ -1117,12 +1265,17 @@
                 });
             }
 
+            function isTextFile(file) {
+                return file.type === "text/plain" || /\.txt$/i.test(file.name || "");
+            }
+
             function addFiles(fileList) {
                 Array.from(fileList).forEach(function(file) {
-                    if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+                    var fileType = file.type || "";
+                    if (!fileType.startsWith("image/") && fileType !== "application/pdf" && !isTextFile(file)) {
                         appendError(0, "Unsupported attachment", {
                             error: {
-                                message: file.name + " is not an image or PDF.",
+                                message: file.name + " is not an image, PDF, or TXT file.",
                                 type: "invalid_attachment",
                                 code: "unsupported_file_type"
                             }
@@ -1143,23 +1296,44 @@
                 });
             }
 
+            function fileToText(file) {
+                return new Promise(function(resolve, reject) {
+                    var reader = new FileReader();
+                    reader.onload = function() { resolve(reader.result || ""); };
+                    reader.onerror = function() { reject(reader.error); };
+                    reader.readAsText(file);
+                });
+            }
+
             async function buildUserContent(text) {
                 if (!attachedFiles.length) return text;
                 var parts = [];
                 if (text) parts.push({ type: "text", text: text });
                 for (var i = 0; i < attachedFiles.length; i += 1) {
-                    parts.push({
-                        type: "image_url",
-                        image_url: { url: await fileToDataUrl(attachedFiles[i]) }
-                    });
+                    if (isTextFile(attachedFiles[i])) {
+                        var fileText = await fileToText(attachedFiles[i]);
+                        parts.push({
+                            type: "text",
+                            text: [
+                                '[Attached text file: "' + attachedFiles[i].name + '"]',
+                                fileText,
+                                '[End attached text file: "' + attachedFiles[i].name + '"]'
+                            ].join("\n")
+                        });
+                    } else {
+                        parts.push({
+                            type: "image_url",
+                            image_url: { url: await fileToDataUrl(attachedFiles[i]) }
+                        });
+                    }
                 }
                 return parts;
             }
 
-            function displayTextFromContent(content) {
-                if (typeof content === "string") return content;
-                var textPart = content.find(function(part) { return part.type === "text"; });
-                return textPart ? textPart.text : "";
+            function displayTextForMessage(text, files) {
+                if (text) return text;
+                if (!files || !files.length) return "";
+                return files.length === 1 ? "Attached 1 file" : "Attached " + files.length + " files";
             }
 
             async function parseResponseBody(response) {
@@ -1237,7 +1411,7 @@
                         stream: supportsStreaming(modelEl.value)
                     };
 
-                    appendMessage("user", displayTextFromContent(content), filesForMessage);
+                    var userTarget = appendMessage("user", displayTextForMessage(text, filesForMessage), filesForMessage);
                     assistantTarget = appendMessage("assistant", "", null, { model: payload.model, loading: true });
                     promptEl.value = "";
                     autosizePrompt();
@@ -1250,6 +1424,8 @@
                         body: JSON.stringify(payload)
                     });
                     var requestId = response.headers.get("x-request-id");
+                    setMessageRequestId(userTarget, requestId);
+                    setMessageRequestId(assistantTarget, requestId);
 
                     if (!response.ok) {
                         removeMessageBody(assistantTarget);
@@ -1262,12 +1438,15 @@
                     if (payload.stream) {
                         var streamedText = await streamResponse(response, assistantTarget);
                         conversationMessages.push({ role: "assistant", content: streamedText });
+                        updateRenderedMessage(assistantTarget, { text: streamedText });
                     } else {
                         var data = await response.json();
                         var assistantText = responseText(data);
                         renderAssistantMarkdown(assistantTarget, assistantText);
                         conversationMessages.push({ role: "assistant", content: assistantText });
+                        updateRenderedMessage(assistantTarget, { text: assistantText });
                     }
+                    saveChatState();
                 } catch (error) {
                     removeMessageBody(assistantTarget);
                     appendError(0, "Request failed", {
@@ -1284,6 +1463,7 @@
 
             async function loadModels() {
                 try {
+                    var selectedModel = modelEl.value;
                     var response = await fetch(endpoint("/models"));
                     if (!response.ok) return;
                     var data = await response.json();
@@ -1296,6 +1476,12 @@
                         option.textContent = model.id;
                         modelEl.appendChild(option);
                     });
+                    if (selectedModel) {
+                        var hasSelectedModel = Array.from(modelEl.options).some(function(option) {
+                            return option.value === selectedModel;
+                        });
+                        if (hasSelectedModel) modelEl.value = selectedModel;
+                    }
                 } catch (e) {
                     // Keep static fallback options.
                 }
@@ -1318,6 +1504,7 @@
                 fileInputEl.value = "";
             });
             sendEl.addEventListener("click", sendMessage);
+            modelEl.addEventListener("change", saveChatState);
             baseUrlEl.addEventListener("change", loadModels);
             baseUrlEl.addEventListener("input", scheduleLoadModels);
             promptEl.addEventListener("input", autosizePrompt);
@@ -1344,6 +1531,7 @@
                 });
             });
 
+            restoreChatState();
             loadModels();
             checkHealth();
             autosizePrompt();

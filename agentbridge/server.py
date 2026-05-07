@@ -8,12 +8,9 @@ import os
 import re
 import shutil
 import tempfile
-import threading
 import time
 import traceback
-import urllib.error
 import urllib.parse
-import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,6 +23,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import __version__
+from .config import ensure_user_config, load_user_env, session_log_dir, user_env_path
+
+load_user_env()
+
 from .dashboard import DashboardState, create_dashboard_router
 from .models import (
     AVAILABLE_MODELS,
@@ -352,8 +353,7 @@ class SessionLogger:
         self.output_tokens: int | None = None
 
         # Ensure log directory exists
-        self.log_dir = Path(os.environ.get("LOG_DIR", "logs/sessions"))
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir = session_log_dir(create=True)
         self.log_path = self.log_dir / f"{request_id}.json"
 
     def log_chunk(self, content: str) -> None:
@@ -642,10 +642,6 @@ CODEX_TIMEOUT = int(
 )
 OPENROUTER_TIMEOUT = int(
     os.environ.get("OPENROUTER_TIMEOUT", os.environ.get("CLAUDE_TIMEOUT", 120))
-)
-OPENROUTER_API_URL = os.environ.get(
-    "OPENROUTER_API_URL",
-    "https://openrouter.ai/api/v1/chat/completions",
 )
 
 
@@ -1297,26 +1293,41 @@ async def call_codex_cli(
 
 def _openrouter_api_key() -> str:
     """Return the configured OpenRouter API key."""
+    load_user_env(create=True)
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is required for openrouter/<model> requests.")
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is required for openrouter/<model> requests. "
+            f"Set it in {user_env_path()} or the process environment."
+        )
     return api_key
 
 
-def _openrouter_headers() -> dict[str, str]:
-    """Build OpenRouter HTTP headers."""
-    headers = {
-        "Authorization": f"Bearer {_openrouter_api_key()}",
-        "Content-Type": "application/json",
-        "User-Agent": f"agentbridge/{__version__}",
+def _openrouter_client_kwargs() -> dict[str, Any]:
+    """Build OpenRouter SDK client arguments from AgentBridge config."""
+    kwargs = {
+        "api_key": _openrouter_api_key(),
+        "timeout_ms": OPENROUTER_TIMEOUT * 1000,
     }
     referer = os.environ.get("OPENROUTER_SITE_URL")
     title = os.environ.get("OPENROUTER_APP_NAME", "agentbridge")
     if referer:
-        headers["HTTP-Referer"] = referer
+        kwargs["http_referer"] = referer
     if title:
-        headers["X-Title"] = title
-    return headers
+        kwargs["x_open_router_title"] = title
+    return kwargs
+
+
+def _openrouter_client():
+    """Create an OpenRouter SDK client."""
+    try:
+        from openrouter import OpenRouter
+    except ImportError as exc:
+        raise RuntimeError(
+            "The openrouter SDK is required for openrouter/<model> requests. "
+            "Install dependencies with `uv pip install -e .`."
+        ) from exc
+    return OpenRouter(**_openrouter_client_kwargs())
 
 
 def _openrouter_payload(
@@ -1325,50 +1336,46 @@ def _openrouter_payload(
     *,
     stream: bool,
 ) -> dict[str, Any]:
-    """Convert an AgentBridge request into an OpenRouter chat completions payload."""
+    """Convert an AgentBridge request into OpenRouter SDK chat.send kwargs."""
     payload = request.model_dump(exclude_none=True)
     payload["model"] = backend_model
     payload["stream"] = stream
+    payload.pop("n", None)
+    reasoning_effort = payload.pop("reasoning_effort", None)
+    if reasoning_effort and "reasoning" not in payload:
+        payload["reasoning"] = {"effort": reasoning_effort}
     return payload
 
 
-def _openrouter_request(payload: dict[str, Any]) -> urllib.request.Request:
-    """Create an OpenRouter urllib request."""
-    return urllib.request.Request(
-        OPENROUTER_API_URL,
-        data=json.dumps(payload).encode(),
-        headers=_openrouter_headers(),
-        method="POST",
-    )
+def _openrouter_to_dict(value: Any) -> dict[str, Any]:
+    """Normalize OpenRouter SDK response objects into plain dictionaries."""
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        data = value.model_dump(mode="json", exclude_none=True)
+        return data if isinstance(data, dict) else {}
+    if hasattr(value, "dict"):
+        data = value.dict(exclude_none=True)
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
-def _openrouter_error_message(exc: urllib.error.HTTPError) -> str:
-    """Read a useful message from an OpenRouter HTTP error."""
-    body = exc.read().decode(errors="replace")
-    if not body:
-        return f"OpenRouter HTTP {exc.code}"
-    try:
-        data = json.loads(body)
-        error = data.get("error") if isinstance(data, dict) else None
-        if isinstance(error, dict):
-            return str(error.get("message") or error)
-        if error:
-            return str(error)
-    except json.JSONDecodeError:
-        pass
-    return body.strip()
-
-
-def _openrouter_post_json(payload: dict[str, Any]) -> dict[str, Any]:
-    """Blocking OpenRouter JSON request for use in asyncio.to_thread()."""
-    try:
-        with urllib.request.urlopen(
-            _openrouter_request(payload),
-            timeout=OPENROUTER_TIMEOUT,
-        ) as response:
-            return json.loads(response.read().decode(errors="replace"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(_openrouter_error_message(exc)) from exc
+def _openrouter_error_message(exc: Exception) -> str:
+    """Extract a concise message from an OpenRouter SDK exception."""
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            data = response.json()
+            error = data.get("error") if isinstance(data, dict) else None
+            if isinstance(error, dict):
+                return str(error.get("message") or error)
+            if error:
+                return str(error)
+        except Exception:
+            text = getattr(response, "text", "")
+            if text:
+                return str(text).strip()
+    return str(exc)
 
 
 def _message_from_openrouter(data: dict[str, Any]) -> Message:
@@ -1430,10 +1437,13 @@ async def call_openrouter_api(
     query_start = time.monotonic()
 
     try:
-        data = await asyncio.to_thread(
-            _openrouter_post_json,
-            _openrouter_payload(request, backend_model, stream=False),
-        )
+        payload = _openrouter_payload(request, backend_model, stream=False)
+        async with _openrouter_client() as open_router:
+            data_obj = await asyncio.wait_for(
+                open_router.chat.send_async(**payload),
+                timeout=OPENROUTER_TIMEOUT,
+            )
+        data = _openrouter_to_dict(data_obj)
         query_ms = int((time.monotonic() - query_start) * 1000)
         session_logger.log_timing(0, query_ms)
 
@@ -1458,52 +1468,29 @@ async def call_openrouter_api(
         dashboard_state.request_completed(request_id, usage=response.get_usage())
         return response
     except Exception as e:
+        error = (
+            f"Timeout after {OPENROUTER_TIMEOUT}s"
+            if isinstance(e, asyncio.TimeoutError)
+            else _openrouter_error_message(e)
+        )
         tb = traceback.format_exc()
-        logging.error(f"[{request_id}] OpenRouter {type(e).__name__}: {e}")
+        logging.error(f"[{request_id}] OpenRouter {type(e).__name__}: {error}")
         session_logger.log_error(
-            str(e),
+            error,
             exception_type=type(e).__name__,
             traceback_str=tb,
         )
-        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
-        raise
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {error}")
+        raise RuntimeError(error) from e
 
 
-async def _openrouter_stream_lines(payload: dict[str, Any]):
-    """Yield blocking OpenRouter SSE lines without blocking the event loop."""
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[Any] = asyncio.Queue()
-    sentinel = object()
-
-    def _worker() -> None:
-        try:
-            with urllib.request.urlopen(
-                _openrouter_request(payload),
-                timeout=OPENROUTER_TIMEOUT,
-            ) as response:
-                for raw_line in response:
-                    line = raw_line.decode(errors="replace").strip()
-                    if not line:
-                        continue
-                    asyncio.run_coroutine_threadsafe(queue.put(line), loop).result()
-        except urllib.error.HTTPError as exc:
-            asyncio.run_coroutine_threadsafe(
-                queue.put(RuntimeError(_openrouter_error_message(exc))),
-                loop,
-            ).result()
-        except Exception as exc:
-            asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result()
-        finally:
-            asyncio.run_coroutine_threadsafe(queue.put(sentinel), loop).result()
-
-    threading.Thread(target=_worker, daemon=True).start()
-    while True:
-        item = await queue.get()
-        if item is sentinel:
-            break
-        if isinstance(item, BaseException):
-            raise item
-        yield item
+async def _openrouter_stream_chunks(payload: dict[str, Any]):
+    """Yield OpenRouter SDK stream events as dictionaries."""
+    async with asyncio.timeout(OPENROUTER_TIMEOUT):
+        async with _openrouter_client() as open_router:
+            stream = await open_router.chat.send_async(**payload)
+            async for chunk in stream:
+                yield _openrouter_to_dict(chunk)
 
 
 def _openrouter_delta_text(chunk: dict[str, Any]) -> str:
@@ -1551,14 +1538,7 @@ async def stream_openrouter_api(
 
     try:
         payload = _openrouter_payload(request, backend_model, stream=True)
-        async for line in _openrouter_stream_lines(payload):
-            if line.startswith("data:"):
-                line = line.removeprefix("data:").strip()
-            if line == "[DONE]":
-                break
-            if not line:
-                continue
-            chunk = json.loads(line)
+        async for chunk in _openrouter_stream_chunks(payload):
             if not isinstance(chunk, dict):
                 continue
             chunk["model"] = request.model
@@ -1594,14 +1574,19 @@ async def stream_openrouter_api(
         _dashboard_handled = True
         yield "data: [DONE]\n\n"
     except Exception as e:
+        error = (
+            f"Timeout after {OPENROUTER_TIMEOUT}s"
+            if isinstance(e, asyncio.TimeoutError)
+            else _openrouter_error_message(e)
+        )
         tb = traceback.format_exc()
-        logging.error(f"[{request_id}] OpenRouter {type(e).__name__}: {e}")
+        logging.error(f"[{request_id}] OpenRouter {type(e).__name__}: {error}")
         session_logger.log_error(
-            str(e),
+            error,
             exception_type=type(e).__name__,
             traceback_str=tb,
         )
-        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {e}")
+        dashboard_state.request_errored(request_id, f"{type(e).__name__}: {error}")
         _dashboard_handled = True
         error_chunk = ChatCompletionChunk(
             id=request_id,
@@ -2435,7 +2420,7 @@ def get_version() -> str:
     return f"{__version__} ({GIT_HASH})"
 
 
-def _print_banner(port: int, workers: int, timeout: int) -> None:
+def _print_banner(port: int, workers: int, timeout: int, config_dir: Path) -> None:
     """Print clean startup banner with ASCII art bridge and colors."""
     version = get_version()
     print(f"\n  {_CLAUDE}   ╭───╮       ╭───╮{_RESET}")
@@ -2444,6 +2429,7 @@ def _print_banner(port: int, workers: int, timeout: int) -> None:
     print(f"  {_BOLD}{_CLAUDE}agentbridge{_RESET} {_DIM}v{version}{_RESET}\n")
     print(f"  {_DIM}Dashboard{_RESET}  {_CLAUDE}http://127.0.0.1:{port}/dashboard{_RESET}")
     print(f"  {_DIM}API{_RESET}        {_CLAUDE}http://127.0.0.1:{port}/api/v1{_RESET}")
+    print(f"  {_DIM}Config{_RESET}     {config_dir}")
     print(f"  {_DIM}Workers{_RESET}    {_BOLD}{workers}{_RESET}")
     print(f"  {_DIM}Timeout{_RESET}    {timeout}s")
     print()
@@ -2479,13 +2465,14 @@ def main():
     )
     args = parser.parse_args()
 
+    config_dir = ensure_user_config()
     timeout = int(os.environ.get("CLAUDE_TIMEOUT", 120))
 
     # Set worker count for lifespan initialization
     os.environ["POOL_SIZE"] = str(args.workers)
 
     _configure_logging()
-    _print_banner(args.port, args.workers, timeout)
+    _print_banner(args.port, args.workers, timeout, config_dir)
 
     # Suppress uvicorn's default INFO noise
     uvicorn.run(
